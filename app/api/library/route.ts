@@ -64,8 +64,30 @@ export async function POST(request: Request) {
       const fullName = String(body.fullName ?? "").trim();
       const grade = String(body.grade ?? "").trim();
       if (!studentNo || !fullName || !grade) return Response.json({ error: "Öğrenci no, ad soyad ve sınıf zorunludur." }, { status: 400 });
+      const [duplicate] = await db.select({ id: students.id }).from(students).where(eq(students.studentNo, studentNo));
+      if (duplicate) return Response.json({ error: "Bu öğrenci numarasıyla kayıt zaten var." }, { status: 409 });
       await db.insert(students).values({ studentNo, fullName, grade, contact: String(body.contact ?? "").trim(), createdAt: now });
       return Response.json({ ok: true }, { status: 201 });
+    }
+
+    if (action === "updateStudent") {
+      const id = Number(body.id);
+      const studentNo = String(body.studentNo ?? "").trim();
+      const fullName = String(body.fullName ?? "").trim();
+      const grade = String(body.grade ?? "").trim();
+      if (!id || !studentNo || !fullName || !grade) return Response.json({ error: "Zorunlu öğrenci alanları eksik." }, { status: 400 });
+      const [duplicate] = await db.select({ id: students.id }).from(students).where(eq(students.studentNo, studentNo));
+      if (duplicate && duplicate.id !== id) return Response.json({ error: "Bu öğrenci numarası başka bir üyeye ait." }, { status: 409 });
+      await db.update(students).set({ studentNo, fullName, grade, contact: String(body.contact ?? "").trim() }).where(eq(students.id, id));
+      return Response.json({ ok: true });
+    }
+
+    if (action === "deleteStudent") {
+      const id = Number(body.id);
+      const [active] = await db.select({ count: sql<number>`count(*)` }).from(loans).where(and(eq(loans.studentId, id), isNull(loans.returnedAt)));
+      if (Number(active?.count ?? 0) > 0) return Response.json({ error: "Öğrencinin ödünçte kitabı var; önce iade alın." }, { status: 409 });
+      await db.delete(students).where(eq(students.id, id));
+      return Response.json({ ok: true });
     }
 
     if (action === "addBook") {
@@ -73,8 +95,61 @@ export async function POST(request: Request) {
       const title = String(body.title ?? "").trim();
       const author = String(body.author ?? "").trim();
       if (!inventoryNo || !title || !author) return Response.json({ error: "Demirbaş no, kitap adı ve yazar zorunludur." }, { status: 400 });
-      await db.insert(books).values({ inventoryNo, title, author, isbn: String(body.isbn ?? "").trim(), publisher: String(body.publisher ?? "").trim(), category: String(body.category ?? "").trim(), genre: String(body.genre ?? "").trim(), shelf: String(body.shelf ?? "").trim(), dewey: String(body.dewey ?? "").trim(), pages: Number(body.pages) || 0, createdAt: now });
+      const isbn = String(body.isbn ?? "").trim();
+      const [sameDn] = await db.select({ id: books.id }).from(books).where(eq(books.inventoryNo, inventoryNo));
+      if (sameDn) return Response.json({ error: "Bu demirbaş numarasıyla kitap zaten var." }, { status: 409 });
+      if (isbn) {
+        const [sameIsbn] = await db.select({ id: books.id }).from(books).where(eq(books.isbn, isbn));
+        if (sameIsbn) return Response.json({ error: "Bu ISBN numarasıyla kitap zaten var." }, { status: 409 });
+      }
+      await db.insert(books).values({ inventoryNo, title, author, isbn, publisher: String(body.publisher ?? "").trim(), category: String(body.category ?? "").trim(), genre: String(body.genre ?? "").trim(), shelf: String(body.shelf ?? "").trim(), dewey: String(body.dewey ?? "").trim(), pages: Number(body.pages) || 0, createdAt: now });
       return Response.json({ ok: true }, { status: 201 });
+    }
+
+    if (action === "updateBook") {
+      const id = Number(body.id);
+      const inventoryNo = String(body.inventoryNo ?? "").trim();
+      const isbn = String(body.isbn ?? "").trim();
+      const title = String(body.title ?? "").trim();
+      const author = String(body.author ?? "").trim();
+      if (!id || !inventoryNo || !title || !author) return Response.json({ error: "Zorunlu kitap alanları eksik." }, { status: 400 });
+      const [sameDn] = await db.select({ id: books.id }).from(books).where(eq(books.inventoryNo, inventoryNo));
+      if (sameDn && sameDn.id !== id) return Response.json({ error: "Bu demirbaş numarası başka bir kitaba ait." }, { status: 409 });
+      if (isbn) { const [sameIsbn] = await db.select({ id: books.id }).from(books).where(eq(books.isbn, isbn)); if (sameIsbn && sameIsbn.id !== id) return Response.json({ error: "Bu ISBN başka bir kitaba ait." }, { status: 409 }); }
+      await db.update(books).set({ inventoryNo, isbn, title, author, publisher: String(body.publisher ?? "").trim(), category: String(body.category ?? "").trim(), genre: String(body.genre ?? "").trim(), shelf: String(body.shelf ?? "").trim(), dewey: String(body.dewey ?? "").trim(), pages: Number(body.pages) || 0 }).where(eq(books.id, id));
+      return Response.json({ ok: true });
+    }
+
+    if (action === "deleteBook") {
+      const id = Number(body.id);
+      const [active] = await db.select({ count: sql<number>`count(*)` }).from(loans).where(and(eq(loans.bookId, id), isNull(loans.returnedAt)));
+      if (Number(active?.count ?? 0) > 0) return Response.json({ error: "Kitap ödünçte; önce iade alın." }, { status: 409 });
+      await db.delete(books).where(eq(books.id, id));
+      return Response.json({ ok: true });
+    }
+
+    if (action === "changeGrades") {
+      const ids = Array.isArray(body.ids) ? body.ids.map(Number).filter(Boolean) : [];
+      const grade = String(body.grade ?? "").trim();
+      if (!ids.length || !grade) return Response.json({ error: "Öğrenci ve yeni sınıf seçmelisiniz." }, { status: 400 });
+      await db.batch(ids.map(id => db.update(students).set({ grade }).where(eq(students.id, id))));
+      return Response.json({ ok: true });
+    }
+
+    if (action === "promoteGrades") {
+      const all = await db.select().from(students);
+      const updates = all.map(student => { const match = student.grade.match(/^(\d+)(.*)$/); if (!match) return null; const level = Number(match[1]); return level >= 12 ? null : db.update(students).set({ grade: `${level + 1}${match[2]}` }).where(eq(students.id, student.id)); }).filter(Boolean);
+      if (updates.length) await db.batch(updates as Exclude<(typeof updates)[number], null>[]);
+      return Response.json({ ok: true });
+    }
+
+    if (action === "deleteGrade") {
+      const grade = String(body.grade ?? "").trim();
+      if (!grade) return Response.json({ error: "Sınıf seçmelisiniz." }, { status: 400 });
+      const members = await db.select({ id: students.id }).from(students).where(eq(students.grade, grade));
+      for (const member of members) { const [active] = await db.select({ count: sql<number>`count(*)` }).from(loans).where(and(eq(loans.studentId, member.id), isNull(loans.returnedAt))); if (Number(active?.count ?? 0) > 0) return Response.json({ error: "Bu sınıfta ödünçte kitabı olan öğrenci var." }, { status: 409 }); }
+      await db.delete(students).where(eq(students.grade, grade));
+      return Response.json({ ok: true });
     }
 
     if (action === "loan") {
