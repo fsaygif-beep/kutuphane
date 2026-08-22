@@ -29,6 +29,13 @@
       "when": 1787437440224,
       "tag": "0003_bouncy_outlaw_kid",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1787440420529,
+      "tag": "0004_hot_wendigo",
+      "breakpoints": true
     }
   ]
 }

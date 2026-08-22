@@ -8,6 +8,8 @@ export const students = sqliteTable("students", {
   contact: text("contact").notNull().default(""),
   email: text("email").notNull().default(""),
   photoKey: text("photo_key").notNull().default(""),
+  blocked: integer("blocked").notNull().default(0),
+  blockReason: text("block_reason").notNull().default(""),
   createdAt: text("created_at").notNull(),
 });
 
@@ -35,6 +37,7 @@ export const loans = sqliteTable("loans", {
   dueAt: text("due_at").notNull(),
   returnedAt: text("returned_at"),
   schoolYear: text("school_year").notNull(),
+  renewalCount: integer("renewal_count").notNull().default(0),
 });
 
 export const settings = sqliteTable("settings", {
@@ -45,6 +48,29 @@ export const settings = sqliteTable("settings", {
   theme: text("theme").notNull().default("forest"),
   senderName: text("sender_name").notNull().default("Okul Kütüphanesi"),
   senderEmail: text("sender_email").notNull().default(""),
+  extensionDays: integer("extension_days").notNull().default(7),
+  maxRenewals: integer("max_renewals").notNull().default(1),
+  dailyFine: integer("daily_fine").notNull().default(0),
+});
+
+export const appUsers = sqliteTable("app_users", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  email: text("email").notNull().unique(),
+  displayName: text("display_name").notNull(),
+  role: text("role").notNull().default("student"),
+  studentId: integer("student_id"),
+  active: integer("active").notNull().default(1),
+  createdAt: text("created_at").notNull(),
+});
+
+export const bookRequests = sqliteTable("book_requests", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  studentId: integer("student_id").notNull(),
+  title: text("title").notNull(),
+  author: text("author").notNull().default(""),
+  note: text("note").notNull().default(""),
+  status: text("status").notNull().default("new"),
+  createdAt: text("created_at").notNull(),
 });
 
 export const studentChanges = sqliteTable("student_changes", {
