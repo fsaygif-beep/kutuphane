@@ -39,4 +39,5 @@ export const settings = sqliteTable("settings", {
   libraryName: text("library_name").notNull(),
   schoolYear: text("school_year").notNull(),
   loanDays: integer("loan_days").notNull().default(15),
+  theme: text("theme").notNull().default("forest"),
 });

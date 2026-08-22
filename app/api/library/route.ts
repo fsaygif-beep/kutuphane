@@ -31,7 +31,7 @@ export async function GET() {
       .innerJoin(books, eq(loans.bookId, books.id))
       .orderBy(desc(loans.loanedAt), desc(loans.id));
     return Response.json({
-      settings: config ?? { id: 1, libraryName: "Okul Kütüphanesi", schoolYear: "2026-2027", loanDays: 15 },
+      settings: config ?? { id: 1, libraryName: "Okul Kütüphanesi", schoolYear: "2026-2027", loanDays: 15, theme: "forest" },
       students: studentRows, books: bookRows, loans: loanRows, today: isoDate(),
     });
   } catch (error) { return failure(error); }
@@ -45,7 +45,7 @@ export async function POST(request: Request) {
     const now = new Date().toISOString();
 
     if (action === "seed") {
-      await db.insert(settings).values({ id: 1, libraryName: "Atatürk Anadolu Lisesi Kütüphanesi", schoolYear: "2026-2027", loanDays: 15 }).onConflictDoNothing();
+      await db.insert(settings).values({ id: 1, libraryName: "Atatürk Anadolu Lisesi Kütüphanesi", schoolYear: "2026-2027", loanDays: 15, theme: "forest" }).onConflictDoNothing();
       await db.insert(students).values([
         { studentNo: "101", fullName: "Elif Yılmaz", grade: "9-A", contact: "", createdAt: now },
         { studentNo: "205", fullName: "Kerem Arslan", grade: "10-B", contact: "", createdAt: now },
@@ -152,6 +152,33 @@ export async function POST(request: Request) {
       return Response.json({ ok: true });
     }
 
+    if (action === "importStudents") {
+      const rows = Array.isArray(body.rows) ? body.rows as Array<Record<string, unknown>> : [];
+      let inserted = 0; let skipped = 0;
+      for (const row of rows.slice(0, 5000)) {
+        const studentNo = String(row.studentNo ?? "").trim(); const fullName = String(row.fullName ?? "").trim(); const grade = String(row.grade ?? "").trim();
+        if (!studentNo || !fullName || !grade) { skipped++; continue; }
+        const [exists] = await db.select({ id: students.id }).from(students).where(eq(students.studentNo, studentNo));
+        if (exists) { skipped++; continue; }
+        await db.insert(students).values({ studentNo, fullName, grade, contact: String(row.contact ?? "").trim(), createdAt: now }); inserted++;
+      }
+      return Response.json({ ok: true, inserted, skipped });
+    }
+
+    if (action === "importBooks") {
+      const rows = Array.isArray(body.rows) ? body.rows as Array<Record<string, unknown>> : [];
+      let inserted = 0; let skipped = 0;
+      for (const row of rows.slice(0, 5000)) {
+        const inventoryNo = String(row.inventoryNo ?? "").trim(); const isbn = String(row.isbn ?? "").trim(); const title = String(row.title ?? "").trim(); const author = String(row.author ?? "").trim();
+        if (!inventoryNo || !title || !author) { skipped++; continue; }
+        const [sameDn] = await db.select({ id: books.id }).from(books).where(eq(books.inventoryNo, inventoryNo));
+        const [sameIsbn] = isbn ? await db.select({ id: books.id }).from(books).where(eq(books.isbn, isbn)) : [];
+        if (sameDn || sameIsbn) { skipped++; continue; }
+        await db.insert(books).values({ inventoryNo, isbn, title, author, publisher: String(row.publisher ?? "").trim(), category: String(row.category ?? "").trim(), genre: String(row.genre ?? "").trim(), shelf: String(row.shelf ?? "").trim(), dewey: String(row.dewey ?? "").trim(), pages: Number(row.pages) || 0, createdAt: now }); inserted++;
+      }
+      return Response.json({ ok: true, inserted, skipped });
+    }
+
     if (action === "loan") {
       const studentId = Number(body.studentId);
       const bookId = Number(body.bookId);
@@ -173,7 +200,8 @@ export async function POST(request: Request) {
       const libraryName = String(body.libraryName ?? "").trim();
       const schoolYear = String(body.schoolYear ?? "").trim();
       const loanDays = Math.max(1, Number(body.loanDays) || 15);
-      await db.insert(settings).values({ id: 1, libraryName, schoolYear, loanDays }).onConflictDoUpdate({ target: settings.id, set: { libraryName, schoolYear, loanDays } });
+      const theme = ["forest","navy","plum","sand"].includes(String(body.theme)) ? String(body.theme) : "forest";
+      await db.insert(settings).values({ id: 1, libraryName, schoolYear, loanDays, theme }).onConflictDoUpdate({ target: settings.id, set: { libraryName, schoolYear, loanDays, theme } });
       return Response.json({ ok: true });
     }
     return Response.json({ error: "Geçersiz işlem." }, { status: 400 });

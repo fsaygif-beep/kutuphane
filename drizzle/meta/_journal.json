@@ -15,6 +15,13 @@
       "when": 1787434826368,
       "tag": "0001_natural_sumo",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1787436071890,
+      "tag": "0002_rainy_spencer_smythe",
+      "breakpoints": true
     }
   ]
 }
