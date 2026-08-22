@@ -1,6 +1,7 @@
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { env } from "cloudflare:workers";
 import { getDb } from "../../../db";
-import { books, loans, settings, students } from "../../../db/schema";
+import { books, emailLogs, loans, settings, studentChanges, students } from "../../../db/schema";
 
 const isoDate = () => new Date().toISOString().slice(0, 10);
 const plusDays = (date: string, days: number) => {
@@ -22,16 +23,16 @@ export async function GET() {
     const bookRows = await db.select().from(books).orderBy(books.title);
     const loanRows = await db.select({
       id: loans.id, studentId: students.id, studentNo: students.studentNo,
-      studentName: students.fullName, grade: students.grade, contact: students.contact,
+      studentName: students.fullName, grade: students.grade, contact: students.contact, email: students.email, studentPhotoKey: students.photoKey,
       bookId: books.id, inventoryNo: books.inventoryNo, bookTitle: books.title,
-      author: books.author, loanedAt: loans.loanedAt, dueAt: loans.dueAt,
+      author: books.author, bookCoverKey: books.coverKey, loanedAt: loans.loanedAt, dueAt: loans.dueAt,
       returnedAt: loans.returnedAt, schoolYear: loans.schoolYear,
     }).from(loans)
       .innerJoin(students, eq(loans.studentId, students.id))
       .innerJoin(books, eq(loans.bookId, books.id))
       .orderBy(desc(loans.loanedAt), desc(loans.id));
     return Response.json({
-      settings: config ?? { id: 1, libraryName: "Okul Kütüphanesi", schoolYear: "2026-2027", loanDays: 15, theme: "forest" },
+      settings: config ?? { id: 1, libraryName: "Okul Kütüphanesi", schoolYear: "2026-2027", loanDays: 15, theme: "forest", senderName: "Okul Kütüphanesi", senderEmail: "" },
       students: studentRows, books: bookRows, loans: loanRows, today: isoDate(),
     });
   } catch (error) { return failure(error); }
@@ -44,8 +45,10 @@ export async function POST(request: Request) {
     const action = String(body.action ?? "");
     const now = new Date().toISOString();
 
+    if (action === "noop") return Response.json({ ok: true });
+
     if (action === "seed") {
-      await db.insert(settings).values({ id: 1, libraryName: "Atatürk Anadolu Lisesi Kütüphanesi", schoolYear: "2026-2027", loanDays: 15, theme: "forest" }).onConflictDoNothing();
+      await db.insert(settings).values({ id: 1, libraryName: "Atatürk Anadolu Lisesi Kütüphanesi", schoolYear: "2026-2027", loanDays: 15, theme: "forest", senderName: "Okul Kütüphanesi", senderEmail: "" }).onConflictDoNothing();
       await db.insert(students).values([
         { studentNo: "101", fullName: "Elif Yılmaz", grade: "9-A", contact: "", createdAt: now },
         { studentNo: "205", fullName: "Kerem Arslan", grade: "10-B", contact: "", createdAt: now },
@@ -66,7 +69,7 @@ export async function POST(request: Request) {
       if (!studentNo || !fullName || !grade) return Response.json({ error: "Öğrenci no, ad soyad ve sınıf zorunludur." }, { status: 400 });
       const [duplicate] = await db.select({ id: students.id }).from(students).where(eq(students.studentNo, studentNo));
       if (duplicate) return Response.json({ error: "Bu öğrenci numarasıyla kayıt zaten var." }, { status: 409 });
-      await db.insert(students).values({ studentNo, fullName, grade, contact: String(body.contact ?? "").trim(), createdAt: now });
+      await db.insert(students).values({ studentNo, fullName, grade, contact: String(body.contact ?? "").trim(), email: String(body.email ?? "").trim(), createdAt: now });
       return Response.json({ ok: true }, { status: 201 });
     }
 
@@ -78,7 +81,7 @@ export async function POST(request: Request) {
       if (!id || !studentNo || !fullName || !grade) return Response.json({ error: "Zorunlu öğrenci alanları eksik." }, { status: 400 });
       const [duplicate] = await db.select({ id: students.id }).from(students).where(eq(students.studentNo, studentNo));
       if (duplicate && duplicate.id !== id) return Response.json({ error: "Bu öğrenci numarası başka bir üyeye ait." }, { status: 409 });
-      await db.update(students).set({ studentNo, fullName, grade, contact: String(body.contact ?? "").trim() }).where(eq(students.id, id));
+      await db.update(students).set({ studentNo, fullName, grade, contact: String(body.contact ?? "").trim(), email: String(body.email ?? "").trim() }).where(eq(students.id, id));
       return Response.json({ ok: true });
     }
 
@@ -160,9 +163,35 @@ export async function POST(request: Request) {
         if (!studentNo || !fullName || !grade) { skipped++; continue; }
         const [exists] = await db.select({ id: students.id }).from(students).where(eq(students.studentNo, studentNo));
         if (exists) { skipped++; continue; }
-        await db.insert(students).values({ studentNo, fullName, grade, contact: String(row.contact ?? "").trim(), createdAt: now }); inserted++;
+        await db.insert(students).values({ studentNo, fullName, grade, contact: String(row.contact ?? "").trim(), email: String(row.email ?? "").trim(), createdAt: now }); inserted++;
       }
       return Response.json({ ok: true, inserted, skipped });
+    }
+
+    if (action === "syncStudents") {
+      const rows = Array.isArray(body.rows) ? body.rows as Array<Record<string, unknown>> : [];
+      let inserted = 0; let updated = 0; let unchanged = 0;
+      for (const row of rows.slice(0, 5000)) {
+        const studentNo = String(row.studentNo ?? "").trim();
+        const fullName = String(row.fullName ?? "").trim();
+        const grade = String(row.grade ?? "").trim();
+        const contact = String(row.contact ?? "").trim();
+        const email = String(row.email ?? "").trim();
+        if (!studentNo || !fullName || !grade) { unchanged++; continue; }
+        const [current] = await db.select().from(students).where(eq(students.studentNo, studentNo));
+        if (!current) {
+          await db.insert(students).values({ studentNo, fullName, grade, contact, email, createdAt: now }); inserted++;
+          continue;
+        }
+        const changes = (["fullName","grade","contact","email"] as const)
+          .map(field => ({ field, oldValue: String(current[field] ?? ""), newValue: String({fullName,grade,contact,email}[field] ?? "") }))
+          .filter(change => change.oldValue !== change.newValue);
+        if (!changes.length) { unchanged++; continue; }
+        await db.update(students).set({ fullName, grade, contact, email }).where(eq(students.id, current.id));
+        await db.insert(studentChanges).values(changes.map(change => ({ studentId: current.id, studentNo, ...change, source: "e-okul", changedAt: now })));
+        updated++;
+      }
+      return Response.json({ ok: true, inserted, updated, unchanged });
     }
 
     if (action === "importBooks") {
@@ -201,8 +230,33 @@ export async function POST(request: Request) {
       const schoolYear = String(body.schoolYear ?? "").trim();
       const loanDays = Math.max(1, Number(body.loanDays) || 15);
       const theme = ["forest","navy","plum","sand"].includes(String(body.theme)) ? String(body.theme) : "forest";
-      await db.insert(settings).values({ id: 1, libraryName, schoolYear, loanDays, theme }).onConflictDoUpdate({ target: settings.id, set: { libraryName, schoolYear, loanDays, theme } });
+      const senderName = String(body.senderName ?? "Okul Kütüphanesi").trim();
+      const senderEmail = String(body.senderEmail ?? "").trim();
+      await db.insert(settings).values({ id: 1, libraryName, schoolYear, loanDays, theme, senderName, senderEmail }).onConflictDoUpdate({ target: settings.id, set: { libraryName, schoolYear, loanDays, theme, senderName, senderEmail } });
       return Response.json({ ok: true });
+    }
+
+    if (action === "sendOverdueEmails") {
+      const ids = Array.isArray(body.loanIds) ? body.loanIds.map(Number).filter(Boolean) : [];
+      const runtime = env as unknown as { RESEND_API_KEY?: string };
+      if (!runtime.RESEND_API_KEY) return Response.json({ error: "E-posta servisi henüz bağlanmadı. Ayarlara doğrulanmış gönderen adresi ve Resend anahtarı eklenmelidir." }, { status: 503 });
+      const [config] = await db.select().from(settings).where(eq(settings.id, 1));
+      if (!config?.senderEmail) return Response.json({ error: "Ayarlar bölümünde gönderen e-posta adresini kaydedin." }, { status: 400 });
+      const allRows = await db.select({ id: loans.id, studentId: students.id, studentName: students.fullName, email: students.email, bookTitle: books.title, author: books.author, loanedAt: loans.loanedAt, dueAt: loans.dueAt })
+        .from(loans).innerJoin(students, eq(loans.studentId, students.id)).innerJoin(books, eq(loans.bookId, books.id)).where(isNull(loans.returnedAt));
+      const selected = allRows.filter(row => (!ids.length || ids.includes(row.id)) && row.dueAt < isoDate());
+      const groups = Object.values(selected.reduce<Record<string, typeof selected>>((acc,row)=>{ if(row.email) (acc[row.email]??=[]).push(row); return acc; },{}));
+      let sent = 0; let failed = 0;
+      for (const group of groups) {
+        const first = group[0];
+        const items = group.map(item => `<li><strong>${item.bookTitle}</strong> — ${item.author} (alış: ${item.loanedAt}, son teslim: ${item.dueAt})</li>`).join("");
+        const subject = `${config.libraryName}: geciken kitap hatırlatması`;
+        const response = await fetch("https://api.resend.com/emails", { method:"POST", headers:{"Authorization":`Bearer ${runtime.RESEND_API_KEY}`,"Content-Type":"application/json"}, body:JSON.stringify({from:`${config.senderName} <${config.senderEmail}>`,to:[first.email],subject,html:`<p>Sayın ${first.studentName},</p><p>Okul kütüphanemizden alınan aşağıdaki kitapların teslim süresi geçmiştir:</p><ul>${items}</ul><p>Kitapları en kısa sürede kütüphaneye iade etmenizi rica ederiz.</p><p>${config.libraryName}</p>`}) });
+        const detail = response.ok ? "Gönderildi" : (await response.text()).slice(0,500);
+        await db.insert(emailLogs).values({ studentId:first.studentId, recipient:first.email, subject, status:response.ok?"sent":"failed", detail, sentAt:now });
+        response.ok ? sent++ : failed++;
+      }
+      return Response.json({ ok:true, sent, failed, missingEmail:selected.length-groups.reduce((sum,g)=>sum+g.length,0) });
     }
     return Response.json({ error: "Geçersiz işlem." }, { status: 400 });
   } catch (error) { return failure(error); }

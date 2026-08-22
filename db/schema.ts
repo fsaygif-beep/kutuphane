@@ -6,6 +6,8 @@ export const students = sqliteTable("students", {
   fullName: text("full_name").notNull(),
   grade: text("grade").notNull(),
   contact: text("contact").notNull().default(""),
+  email: text("email").notNull().default(""),
+  photoKey: text("photo_key").notNull().default(""),
   createdAt: text("created_at").notNull(),
 });
 
@@ -21,6 +23,7 @@ export const books = sqliteTable("books", {
   shelf: text("shelf").notNull().default(""),
   dewey: text("dewey").notNull().default(""),
   pages: integer("pages").notNull().default(0),
+  coverKey: text("cover_key").notNull().default(""),
   createdAt: text("created_at").notNull(),
 });
 
@@ -40,4 +43,27 @@ export const settings = sqliteTable("settings", {
   schoolYear: text("school_year").notNull(),
   loanDays: integer("loan_days").notNull().default(15),
   theme: text("theme").notNull().default("forest"),
+  senderName: text("sender_name").notNull().default("Okul Kütüphanesi"),
+  senderEmail: text("sender_email").notNull().default(""),
+});
+
+export const studentChanges = sqliteTable("student_changes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  studentId: integer("student_id").notNull(),
+  studentNo: text("student_no").notNull(),
+  field: text("field").notNull(),
+  oldValue: text("old_value").notNull().default(""),
+  newValue: text("new_value").notNull().default(""),
+  source: text("source").notNull().default("manual"),
+  changedAt: text("changed_at").notNull(),
+});
+
+export const emailLogs = sqliteTable("email_logs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  studentId: integer("student_id").notNull(),
+  recipient: text("recipient").notNull(),
+  subject: text("subject").notNull(),
+  status: text("status").notNull(),
+  detail: text("detail").notNull().default(""),
+  sentAt: text("sent_at").notNull(),
 });

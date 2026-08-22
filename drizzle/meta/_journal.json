@@ -22,6 +22,13 @@
       "when": 1787436071890,
       "tag": "0002_rainy_spencer_smythe",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1787437440224,
+      "tag": "0003_bouncy_outlaw_kid",
+      "breakpoints": true
     }
   ]
 }
