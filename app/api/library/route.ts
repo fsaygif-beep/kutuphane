@@ -1,6 +1,7 @@
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { env } from "cloudflare:workers";
 import { getDb } from "../../../db";
+import { canManage, getAppIdentity } from "../../authz";
 import {
   appUsers,
   bookRequests,
@@ -18,6 +19,8 @@ const plusDays = (date: string, days: number) => {
   value.setUTCDate(value.getUTCDate() + days);
   return value.toISOString().slice(0, 10);
 };
+const authorShelf = (author: string) =>
+  (author.trim().split(/\s+/).at(-1)?.[0] ?? "").toLocaleUpperCase("tr");
 
 function failure(error: unknown) {
   console.error("library api error", error);
@@ -27,6 +30,12 @@ function failure(error: unknown) {
 export async function GET(request: Request) {
   try {
     const db = getDb();
+    const identity = await getAppIdentity(request, true);
+    if (!identity)
+      return Response.json(
+        { error: "Bu hesap için kütüphane erişimi tanımlanmamış." },
+        { status: 403 },
+      );
     const [config] = await db.select().from(settings).where(eq(settings.id, 1));
     const studentRows = await db
       .select()
@@ -77,14 +86,8 @@ export async function GET(request: Request) {
       .select()
       .from(appUsers)
       .orderBy(appUsers.displayName);
-    const viewerEmail =
-      request.headers.get("oai-authenticated-user-email") ?? "";
-    const currentUser =
-      userRows.find(
-        (user) =>
-          user.email.toLocaleLowerCase("tr") ===
-          viewerEmail.toLocaleLowerCase("tr"),
-      ) ?? null;
+    const ownStudentId =
+      identity.role === "student" ? identity.studentId : null;
     return Response.json({
       settings: config ?? {
         id: 1,
@@ -97,13 +100,20 @@ export async function GET(request: Request) {
         extensionDays: 7,
         maxRenewals: 1,
         dailyFine: 0,
+        logoKey: "",
       },
-      students: studentRows,
+      students: ownStudentId
+        ? studentRows.filter((x) => x.id === ownStudentId)
+        : studentRows,
       books: bookRows,
-      loans: loanRows,
-      requests: requestRows,
-      users: userRows,
-      currentUser,
+      loans: ownStudentId
+        ? loanRows.filter((x) => x.studentId === ownStudentId)
+        : loanRows,
+      requests: ownStudentId
+        ? requestRows.filter((x) => x.studentId === ownStudentId)
+        : requestRows,
+      users: identity.role === "admin" ? userRows : [],
+      currentUser: identity,
       today: isoDate(),
     });
   } catch (error) {
@@ -117,6 +127,39 @@ export async function POST(request: Request) {
     const body = (await request.json()) as Record<string, unknown>;
     const action = String(body.action ?? "");
     const now = new Date().toISOString();
+    const identity = await getAppIdentity(request, true);
+    if (!identity)
+      return Response.json(
+        { error: "Oturum veya kullanıcı yetkisi bulunamadı." },
+        { status: 403 },
+      );
+    const adminOnly = new Set([
+      "settings",
+      "upsertUser",
+      "deleteStudent",
+      "deleteBook",
+      "deleteGrade",
+      "promoteGrades",
+      "seed",
+    ]);
+    if (adminOnly.has(action) && identity.role !== "admin")
+      return Response.json(
+        { error: "Bu işlem yalnızca yöneticilere açıktır." },
+        { status: 403 },
+      );
+    if (
+      identity.role === "student" &&
+      !new Set(["addBookRequest", "noop"]).has(action)
+    )
+      return Response.json(
+        { error: "Öğrenci hesabının bu işlem için yetkisi yoktur." },
+        { status: 403 },
+      );
+    if (!canManage(identity) && identity.role !== "student")
+      return Response.json(
+        { error: "Bu işlem için yetkiniz yoktur." },
+        { status: 403 },
+      );
 
     if (action === "noop") return Response.json({ ok: true });
 
@@ -227,16 +270,14 @@ export async function POST(request: Request) {
           { error: "Bu öğrenci numarasıyla kayıt zaten var." },
           { status: 409 },
         );
-      await db
-        .insert(students)
-        .values({
-          studentNo,
-          fullName,
-          grade,
-          contact: String(body.contact ?? "").trim(),
-          email: String(body.email ?? "").trim(),
-          createdAt: now,
-        });
+      await db.insert(students).values({
+        studentNo,
+        fullName,
+        grade,
+        contact: String(body.contact ?? "").trim(),
+        email: String(body.email ?? "").trim(),
+        createdAt: now,
+      });
       return Response.json({ ok: true }, { status: 201 });
     }
 
@@ -268,7 +309,9 @@ export async function POST(request: Request) {
           contact: String(body.contact ?? "").trim(),
           email: String(body.email ?? "").trim(),
           blocked: body.blocked ? 1 : 0,
-          blockReason: body.blocked ? String(body.blockReason ?? "").trim() : "",
+          blockReason: body.blocked
+            ? String(body.blockReason ?? "").trim()
+            : "",
         })
         .where(eq(students.id, id));
       return Response.json({ ok: true });
@@ -319,21 +362,19 @@ export async function POST(request: Request) {
             { status: 409 },
           );
       }
-      await db
-        .insert(books)
-        .values({
-          inventoryNo,
-          title,
-          author,
-          isbn,
-          publisher: String(body.publisher ?? "").trim(),
-          category: String(body.category ?? "").trim(),
-          genre: String(body.genre ?? "").trim(),
-          shelf: String(body.shelf ?? "").trim(),
-          dewey: String(body.dewey ?? "").trim(),
-          pages: Number(body.pages) || 0,
-          createdAt: now,
-        });
+      await db.insert(books).values({
+        inventoryNo,
+        title,
+        author,
+        isbn,
+        publisher: String(body.publisher ?? "").trim(),
+        category: String(body.category ?? "").trim(),
+        genre: String(body.genre ?? "").trim(),
+        shelf: String(body.shelf ?? "").trim() || authorShelf(author),
+        dewey: String(body.dewey ?? "").trim(),
+        pages: Number(body.pages) || 0,
+        createdAt: now,
+      });
       return Response.json({ ok: true }, { status: 201 });
     }
 
@@ -378,7 +419,7 @@ export async function POST(request: Request) {
           publisher: String(body.publisher ?? "").trim(),
           category: String(body.category ?? "").trim(),
           genre: String(body.genre ?? "").trim(),
-          shelf: String(body.shelf ?? "").trim(),
+          shelf: String(body.shelf ?? "").trim() || authorShelf(author),
           dewey: String(body.dewey ?? "").trim(),
           pages: Number(body.pages) || 0,
         })
@@ -484,16 +525,14 @@ export async function POST(request: Request) {
           skipped++;
           continue;
         }
-        await db
-          .insert(students)
-          .values({
-            studentNo,
-            fullName,
-            grade,
-            contact: String(row.contact ?? "").trim(),
-            email: String(row.email ?? "").trim(),
-            createdAt: now,
-          });
+        await db.insert(students).values({
+          studentNo,
+          fullName,
+          grade,
+          contact: String(row.contact ?? "").trim(),
+          email: String(row.email ?? "").trim(),
+          createdAt: now,
+        });
         inserted++;
       }
       return Response.json({ ok: true, inserted, skipped });
@@ -521,16 +560,14 @@ export async function POST(request: Request) {
           .from(students)
           .where(eq(students.studentNo, studentNo));
         if (!current) {
-          await db
-            .insert(students)
-            .values({
-              studentNo,
-              fullName,
-              grade,
-              contact,
-              email,
-              createdAt: now,
-            });
+          await db.insert(students).values({
+            studentNo,
+            fullName,
+            grade,
+            contact,
+            email,
+            createdAt: now,
+          });
           inserted++;
           continue;
         }
@@ -549,17 +586,15 @@ export async function POST(request: Request) {
           .update(students)
           .set({ fullName, grade, contact, email })
           .where(eq(students.id, current.id));
-        await db
-          .insert(studentChanges)
-          .values(
-            changes.map((change) => ({
-              studentId: current.id,
-              studentNo,
-              ...change,
-              source: "e-okul",
-              changedAt: now,
-            })),
-          );
+        await db.insert(studentChanges).values(
+          changes.map((change) => ({
+            studentId: current.id,
+            studentNo,
+            ...change,
+            source: "e-okul",
+            changedAt: now,
+          })),
+        );
         updated++;
       }
       return Response.json({ ok: true, inserted, updated, unchanged });
@@ -594,21 +629,19 @@ export async function POST(request: Request) {
           skipped++;
           continue;
         }
-        await db
-          .insert(books)
-          .values({
-            inventoryNo,
-            isbn,
-            title,
-            author,
-            publisher: String(row.publisher ?? "").trim(),
-            category: String(row.category ?? "").trim(),
-            genre: String(row.genre ?? "").trim(),
-            shelf: String(row.shelf ?? "").trim(),
-            dewey: String(row.dewey ?? "").trim(),
-            pages: Number(row.pages) || 0,
-            createdAt: now,
-          });
+        await db.insert(books).values({
+          inventoryNo,
+          isbn,
+          title,
+          author,
+          publisher: String(row.publisher ?? "").trim(),
+          category: String(row.category ?? "").trim(),
+          genre: String(row.genre ?? "").trim(),
+          shelf: String(row.shelf ?? "").trim() || authorShelf(author),
+          dewey: String(row.dewey ?? "").trim(),
+          pages: Number(row.pages) || 0,
+          createdAt: now,
+        });
         inserted++;
       }
       return Response.json({ ok: true, inserted, skipped });
@@ -647,15 +680,13 @@ export async function POST(request: Request) {
         .from(settings)
         .where(eq(settings.id, 1));
       const loanedAt = isoDate();
-      await db
-        .insert(loans)
-        .values({
-          studentId,
-          bookId,
-          loanedAt,
-          dueAt: plusDays(loanedAt, config?.loanDays ?? 15),
-          schoolYear: config?.schoolYear ?? "2026-2027",
-        });
+      await db.insert(loans).values({
+        studentId,
+        bookId,
+        loanedAt,
+        dueAt: plusDays(loanedAt, config?.loanDays ?? 15),
+        schoolYear: config?.schoolYear ?? "2026-2027",
+      });
       return Response.json({ ok: true }, { status: 201 });
     }
 
@@ -708,22 +739,23 @@ export async function POST(request: Request) {
     }
 
     if (action === "addBookRequest") {
-      const studentId = Number(body.studentId);
+      const studentId =
+        identity.role === "student"
+          ? Number(identity.studentId)
+          : Number(body.studentId);
       const title = String(body.title ?? "").trim();
       if (!studentId || !title)
         return Response.json(
           { error: "Öğrenci ve kitap adı zorunludur." },
           { status: 400 },
         );
-      await db
-        .insert(bookRequests)
-        .values({
-          studentId,
-          title,
-          author: String(body.author ?? "").trim(),
-          note: String(body.note ?? "").trim(),
-          createdAt: now,
-        });
+      await db.insert(bookRequests).values({
+        studentId,
+        title,
+        author: String(body.author ?? "").trim(),
+        note: String(body.note ?? "").trim(),
+        createdAt: now,
+      });
       return Response.json({ ok: true }, { status: 201 });
     }
 
@@ -888,16 +920,14 @@ export async function POST(request: Request) {
         const detail = response.ok
           ? "Gönderildi"
           : (await response.text()).slice(0, 500);
-        await db
-          .insert(emailLogs)
-          .values({
-            studentId: first.studentId,
-            recipient: first.email,
-            subject,
-            status: response.ok ? "sent" : "failed",
-            detail,
-            sentAt: now,
-          });
+        await db.insert(emailLogs).values({
+          studentId: first.studentId,
+          recipient: first.email,
+          subject,
+          status: response.ok ? "sent" : "failed",
+          detail,
+          sentAt: now,
+        });
         response.ok ? sent++ : failed++;
       }
       return Response.json({

@@ -36,6 +36,13 @@
       "when": 1787440420529,
       "tag": "0004_hot_wendigo",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1787442088396,
+      "tag": "0005_remarkable_fantastic_four",
+      "breakpoints": true
     }
   ]
 }

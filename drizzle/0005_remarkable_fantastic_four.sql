@@ -1,0 +1,1 @@
+ALTER TABLE `settings` ADD `logo_key` text DEFAULT '' NOT NULL;

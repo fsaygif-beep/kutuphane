@@ -78,6 +78,7 @@ type Data = {
     extensionDays: number;
     maxRenewals: number;
     dailyFine: number;
+    logoKey: string;
   };
   students: Student[];
   books: Book[];
@@ -133,7 +134,7 @@ async function request(action: string, payload: Record<string, unknown> = {}) {
 
 async function uploadImage(
   file: File,
-  kind: "student" | "book",
+  kind: "student" | "book" | "logo",
   recordKey: string,
 ) {
   const form = new FormData();
@@ -220,6 +221,14 @@ export default function LibraryApp() {
     ["Ödünçte", activeLoans.length, "aktif"],
     ["Geciken", overdue.length, "gecikme"],
   ];
+  const role = data.currentUser?.role ?? "student";
+  const visibleMenu = menu.filter(
+    ([id]) =>
+      role === "admin" ||
+      (role === "staff"
+        ? id !== "settings"
+        : ["dashboard", "books", "requests", "assistant"].includes(id)),
+  );
   return (
     <div className="shell" data-theme={data.settings.theme || "forest"}>
       <aside>
@@ -231,7 +240,7 @@ export default function LibraryApp() {
           </div>
         </div>
         <nav>
-          {menu.map(([id, label, icon]) => (
+          {visibleMenu.map(([id, label, icon]) => (
             <button
               key={id}
               className={tab === id ? "active" : ""}
@@ -252,11 +261,31 @@ export default function LibraryApp() {
       </aside>
       <main>
         <header>
-          <div>
-            <p className="eyebrow">
-              {data.settings.schoolYear} Eğitim-Öğretim Yılı
-            </p>
-            <h1>{data.settings.libraryName}</h1>
+          <div className="header-title">
+            {data.settings.logoKey && (
+              <img
+                className="school-logo"
+                src={mediaUrl(data.settings.logoKey)}
+                alt="Okul logosu"
+              />
+            )}
+            <div>
+              <p className="eyebrow">
+                {data.settings.schoolYear} Eğitim-Öğretim Yılı
+              </p>
+              <h1>{data.settings.libraryName}</h1>
+            </div>
+          </div>
+          <div className="account-box">
+            <strong>{data.currentUser?.displayName}</strong>
+            <small>
+              {role === "admin"
+                ? "Yönetici"
+                : role === "staff"
+                  ? "Kütüphane görevlisi"
+                  : "Öğrenci"}
+            </small>
+            <a href="/signout-with-chatgpt?return_to=/">Çıkış yap</a>
           </div>
           <div className="today">
             <small>BUGÜN</small>
@@ -280,6 +309,7 @@ export default function LibraryApp() {
             active={activeLoans}
             overdue={overdue}
             setTab={setTab}
+            student={role === "student"}
           />
         )}
         {tab === "circulation" && (
@@ -289,6 +319,7 @@ export default function LibraryApp() {
             active={activeLoans}
             busy={busy}
             act={act}
+            readOnly={role === "student"}
           />
         )}
         {tab === "books" && (
@@ -297,6 +328,7 @@ export default function LibraryApp() {
             active={activeLoans}
             busy={busy}
             act={act}
+            studentMode={role === "student"}
           />
         )}
         {tab === "students" && (
@@ -316,7 +348,13 @@ export default function LibraryApp() {
           />
         )}
         {tab === "overdue" && (
-          <Overdue rows={overdue} today={data.today} dailyFine={data.settings.dailyFine} busy={busy} act={act} />
+          <Overdue
+            rows={overdue}
+            today={data.today}
+            dailyFine={data.settings.dailyFine}
+            busy={busy}
+            act={act}
+          />
         )}
         {tab === "inventory" && (
           <Inventory books={data.books} active={activeLoans} />
@@ -343,11 +381,13 @@ function Dashboard({
   active,
   overdue,
   setTab,
+  student,
 }: {
   stats: (string | number)[][];
   active: Loan[];
   overdue: Loan[];
   setTab: (t: Tab) => void;
+  student: boolean;
 }) {
   return (
     <section>
@@ -356,8 +396,11 @@ function Dashboard({
           <h2>Genel Bakış</h2>
           <p>Kütüphanenizin bugünkü durumunu tek bakışta görün.</p>
         </div>
-        <button className="primary" onClick={() => setTab("circulation")}>
-          + Yeni ödünç işlemi
+        <button
+          className="primary"
+          onClick={() => setTab(student ? "requests" : "circulation")}
+        >
+          {student ? "Kitap talep et" : "+ Yeni ödünç işlemi"}
         </button>
       </div>
       <div className="reading-banner">
@@ -514,11 +557,13 @@ function Books({
   active,
   busy,
   act,
+  readOnly = false,
 }: {
   books: Book[];
   active: Loan[];
   busy: boolean;
   act: (a: string, p: Record<string, unknown>, s: string) => Promise<void>;
+  readOnly?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Book | null>(null);
@@ -579,32 +624,34 @@ function Books({
         title="Kitaplar"
         text="Katalog kayıtlarını arayın, raf durumunu izleyin ve kapak görsellerini yönetin."
         action={
-          <div className="actions">
-            <button className="secondary" onClick={exportRows}>
-              Dışa aktar
-            </button>
-            <label className="import-btn">
-              İçe aktar
-              <input
-                type="file"
-                accept=".xlsx,.xls,.csv"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) void importFile(file);
-                  e.target.value = "";
+          readOnly ? undefined : (
+            <div className="actions">
+              <button className="secondary" onClick={exportRows}>
+                Dışa aktar
+              </button>
+              <label className="import-btn">
+                İçe aktar
+                <input
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void importFile(file);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+              <button
+                className="primary"
+                onClick={() => {
+                  setEditing(null);
+                  setOpen(!open);
                 }}
-              />
-            </label>
-            <button
-              className="primary"
-              onClick={() => {
-                setEditing(null);
-                setOpen(!open);
-              }}
-            >
-              + Kitap ekle
-            </button>
-          </div>
+              >
+                + Kitap ekle
+              </button>
+            </div>
+          )
         }
       />
       {open && (
@@ -665,29 +712,31 @@ function Books({
               <small>
                 {book.inventoryNo} · {book.shelf || "Raf belirtilmedi"}
               </small>
-              <div className="inline-actions">
-                <label className="image-upload">
-                  {book.coverKey ? "Kapağı değiştir" : "Kapak ekle"}
-                  <input
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) void imageChanged(book, file);
-                      e.target.value = "";
+              {!readOnly && (
+                <div className="inline-actions">
+                  <label className="image-upload">
+                    {book.coverKey ? "Kapağı değiştir" : "Kapak ekle"}
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) void imageChanged(book, file);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                  <button
+                    className="edit-link"
+                    onClick={() => {
+                      setEditing(book);
+                      setOpen(true);
                     }}
-                  />
-                </label>
-                <button
-                  className="edit-link"
-                  onClick={() => {
-                    setEditing(book);
-                    setOpen(true);
-                  }}
-                >
-                  Düzenle
-                </button>
-              </div>
+                  >
+                    Düzenle
+                  </button>
+                </div>
+              )}
             </div>
           </article>
         ))}
@@ -1110,7 +1159,15 @@ function Overdue({
                     {daysBetween(x.dueAt, today)} gün
                   </span>
                 </td>
-                <td>{(daysBetween(x.dueAt,today)*dailyFine/100).toLocaleString("tr-TR",{style:"currency",currency:"TRY"})}</td>
+                <td>
+                  {(
+                    (daysBetween(x.dueAt, today) * dailyFine) /
+                    100
+                  ).toLocaleString("tr-TR", {
+                    style: "currency",
+                    currency: "TRY",
+                  })}
+                </td>
                 <td>
                   <button
                     className="small"
@@ -1137,13 +1194,17 @@ function Requests({
   students,
   busy,
   act,
+  studentMode = false,
 }: {
   rows: BookRequest[];
   students: Student[];
   busy: boolean;
   act: (a: string, p: Record<string, unknown>, s: string) => Promise<void>;
+  studentMode?: boolean;
 }) {
-  const [studentId, setStudentId] = useState("");
+  const [studentId, setStudentId] = useState(
+    studentMode && students[0] ? String(students[0].id) : "",
+  );
   const [title, setTitle] = useState("");
   const [author, setAuthor] = useState("");
   const [note, setNote] = useState("");
@@ -1169,6 +1230,7 @@ function Requests({
             <label>
               Öğrenci
               <select
+                disabled={studentMode}
                 value={studentId}
                 onChange={(e) => setStudentId(e.target.value)}
               >
@@ -1230,23 +1292,27 @@ function Requests({
                   </td>
                   <td>{row.note || "—"}</td>
                   <td>
-                    <select
-                      value={row.status}
-                      disabled={busy}
-                      onChange={(e) =>
-                        void act(
-                          "updateBookRequest",
-                          { id: row.id, status: e.target.value },
-                          "Talep durumu güncellendi.",
-                        )
-                      }
-                    >
-                      <option value="new">Yeni</option>
-                      <option value="reviewed">İnceleniyor</option>
-                      <option value="approved">Onaylandı</option>
-                      <option value="rejected">Uygun değil</option>
-                      <option value="purchased">Temin edildi</option>
-                    </select>
+                    {studentMode ? (
+                      <span className="badge blue">{row.status}</span>
+                    ) : (
+                      <select
+                        value={row.status}
+                        disabled={busy}
+                        onChange={(e) =>
+                          void act(
+                            "updateBookRequest",
+                            { id: row.id, status: e.target.value },
+                            "Talep durumu güncellendi.",
+                          )
+                        }
+                      >
+                        <option value="new">Yeni</option>
+                        <option value="reviewed">İnceleniyor</option>
+                        <option value="approved">Onaylandı</option>
+                        <option value="rejected">Uygun değil</option>
+                        <option value="purchased">Temin edildi</option>
+                      </select>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -1435,6 +1501,26 @@ function Reports({ data }: { data: Data }) {
 
 function Inventory({ books, active }: { books: Book[]; active: Loan[] }) {
   const [query, setQuery] = useState("");
+  const [genreFilter, setGenreFilter] = useState("");
+  const presetGenres = [
+    "İNGİLİZ EDEBİYATI",
+    "FRANSIZ EDEBİYATI",
+    "ŞİİR",
+    "DENEME MAKALE",
+    "TÜRK ROMAN HİKAYE",
+  ];
+  const genres = [
+    ...new Set([...presetGenres, ...books.map((x) => x.genre).filter(Boolean)]),
+  ].sort((a, b) => a.localeCompare(b, "tr"));
+  const shelfLetter = (author: string) =>
+    (author.trim().split(/\s+/).at(-1)?.[0] ?? "?").toLocaleUpperCase("tr");
+  const groupedBooks = books
+    .filter((x) => !genreFilter || x.genre === genreFilter)
+    .sort(
+      (a, b) =>
+        shelfLetter(a.author).localeCompare(shelfLetter(b.author), "tr") ||
+        a.author.localeCompare(b.author, "tr"),
+    );
   const [rows, setRows] = useState<
     Array<{ query: string; book?: Book; status: string }>
   >([]);
@@ -1442,7 +1528,7 @@ function Inventory({ books, active }: { books: Book[]; active: Loan[] }) {
     const needle = query.trim().toLocaleLowerCase("tr");
     if (!needle) return;
     const book = books.find((x) =>
-      `${x.title} ${x.inventoryNo} ${x.isbn}`
+      `${x.title} ${x.inventoryNo} ${x.isbn} ${x.genre}`
         .toLocaleLowerCase("tr")
         .includes(needle),
     );
@@ -1488,7 +1574,7 @@ function Inventory({ books, active }: { books: Book[]; active: Loan[] }) {
     <section>
       <PageHead
         title="Kitap Sayımı ve Raf Kontrol"
-        text="Kitap adı, demirbaş no veya ISBN ile raftaki durumu kontrol edin."
+        text="Kitapları tek tek kontrol edin; tür ve yazar soyadının raf harfine göre raftaki adetleri görün."
         action={
           <button
             className="secondary"
@@ -1499,6 +1585,70 @@ function Inventory({ books, active }: { books: Book[]; active: Loan[] }) {
           </button>
         }
       />
+      <div className="panel inventory-filters">
+        <label>
+          TÜR
+          <select
+            value={genreFilter}
+            onChange={(e) => setGenreFilter(e.target.value)}
+          >
+            <option value="">Tüm türler</option>
+            {genres.map((x) => (
+              <option key={x}>{x}</option>
+            ))}
+          </select>
+        </label>
+        <div>
+          <strong>{groupedBooks.length}</strong>
+          <small>Seçili türde toplam</small>
+        </div>
+        <div>
+          <strong>
+            {
+              groupedBooks.filter((x) => !active.some((l) => l.bookId === x.id))
+                .length
+            }
+          </strong>
+          <small>Rafta bulunan</small>
+        </div>
+      </div>
+      <div className="table-card genre-shelf-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Tür</th>
+              <th>Raf Harfi</th>
+              <th>Yazar</th>
+              <th>Kitap</th>
+              <th>Rafta</th>
+            </tr>
+          </thead>
+          <tbody>
+            {groupedBooks.map((book) => (
+              <tr key={book.id}>
+                <td>{book.genre || "Tür belirtilmedi"}</td>
+                <td>
+                  <span className="shelf-letter">
+                    {shelfLetter(book.author)}
+                  </span>
+                </td>
+                <td>{book.author}</td>
+                <td>
+                  {book.title}
+                  <small>{book.inventoryNo}</small>
+                </td>
+                <td>
+                  {active.some((l) => l.bookId === book.id) ? (
+                    <span className="badge red">Ödünçte</span>
+                  ) : (
+                    <span className="badge green">Rafta</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       <div className="inventory">
         <Card title="Kitap Sorgula">
           <div className="form-grid one">
@@ -1541,6 +1691,7 @@ function Inventory({ books, active }: { books: Book[]; active: Loan[] }) {
                 <th>Kitap</th>
                 <th>DN / ISBN</th>
                 <th>Raf</th>
+                <th>Tür</th>
                 <th>Durum</th>
               </tr>
             </thead>
@@ -1560,6 +1711,7 @@ function Inventory({ books, active }: { books: Book[]; active: Loan[] }) {
                       : "—"}
                   </td>
                   <td>{x.book?.shelf || "—"}</td>
+                  <td>{x.book?.genre || "—"}</td>
                   <td>
                     <span
                       className={
@@ -1618,6 +1770,14 @@ function Settings({
     setForm({ ...form, theme });
     document.documentElement.dataset.theme = theme;
   };
+  const changeLogo = async (file: File) => {
+    try {
+      await uploadImage(file, "logo", "school");
+      await act("noop", {}, "Okul logosu güncellendi.");
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Logo yüklenemedi.");
+    }
+  };
   return (
     <section>
       <PageHead
@@ -1667,24 +1827,169 @@ function Settings({
             </button>
           </div>
         </Card>
+        <Card title="Okul Logosu">
+          <div className="logo-settings">
+            {config.logoKey ? (
+              <img src={mediaUrl(config.logoKey)} alt="Yüklü okul logosu" />
+            ) : (
+              <div className="logo-placeholder">LOGO</div>
+            )}
+            <div>
+              <p className="muted">
+                JPG, PNG veya WebP biçiminde en fazla 5 MB. Logo ana panelin üst
+                bölümünde gösterilir.
+              </p>
+              <label className="import-btn">
+                Logo seç
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void changeLogo(file);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+            </div>
+          </div>
+        </Card>
         <Card title="Süre Uzatma ve Gecikme">
           <div className="form-grid one">
-            <label>Her uzatmada eklenecek gün<input type="number" min="1" value={form.extensionDays} onChange={(e)=>setForm({...form,extensionDays:Number(e.target.value)})}/></label>
-            <label>En fazla uzatma sayısı<input type="number" min="0" value={form.maxRenewals} onChange={(e)=>setForm({...form,maxRenewals:Number(e.target.value)})}/></label>
-            <label>Günlük gecikme bedeli (kuruş)<input type="number" min="0" value={form.dailyFine} onChange={(e)=>setForm({...form,dailyFine:Number(e.target.value)})}/></label>
-            <p className="muted">Ceza, gecikilen gün × günlük tutar olarak hesaplanır. 100 kuruş = 1 TL.</p>
-            <button className="secondary" disabled={busy} onClick={()=>act("settings",form,"Süre uzatma ve gecikme ayarları kaydedildi.")}>Kuralları kaydet</button>
+            <label>
+              Her uzatmada eklenecek gün
+              <input
+                type="number"
+                min="1"
+                value={form.extensionDays}
+                onChange={(e) =>
+                  setForm({ ...form, extensionDays: Number(e.target.value) })
+                }
+              />
+            </label>
+            <label>
+              En fazla uzatma sayısı
+              <input
+                type="number"
+                min="0"
+                value={form.maxRenewals}
+                onChange={(e) =>
+                  setForm({ ...form, maxRenewals: Number(e.target.value) })
+                }
+              />
+            </label>
+            <label>
+              Günlük gecikme bedeli (kuruş)
+              <input
+                type="number"
+                min="0"
+                value={form.dailyFine}
+                onChange={(e) =>
+                  setForm({ ...form, dailyFine: Number(e.target.value) })
+                }
+              />
+            </label>
+            <p className="muted">
+              Ceza, gecikilen gün × günlük tutar olarak hesaplanır. 100 kuruş =
+              1 TL.
+            </p>
+            <button
+              className="secondary"
+              disabled={busy}
+              onClick={() =>
+                act(
+                  "settings",
+                  form,
+                  "Süre uzatma ve gecikme ayarları kaydedildi.",
+                )
+              }
+            >
+              Kuralları kaydet
+            </button>
           </div>
         </Card>
         <Card title="Kullanıcı ve Yetki Yönetimi">
           <div className="form-grid one">
-            <label>Ad soyad<input value={userForm.displayName} onChange={(e)=>setUserForm({...userForm,displayName:e.target.value})}/></label>
-            <label>Giriş e-postası<input type="email" value={userForm.email} onChange={(e)=>setUserForm({...userForm,email:e.target.value})}/></label>
-            <label>Yetki<select value={userForm.role} onChange={(e)=>setUserForm({...userForm,role:e.target.value})}><option value="admin">Yönetici</option><option value="staff">Kütüphane görevlisi</option><option value="student">Öğrenci</option></select></label>
-            {userForm.role==="student"&&<label>Öğrenci kaydı<select value={userForm.studentId} onChange={(e)=>setUserForm({...userForm,studentId:e.target.value})}><option value="">Seçin…</option>{students.map((x)=><option key={x.id} value={x.id}>{x.studentNo} · {x.fullName}</option>)}</select></label>}
-            <button className="primary" disabled={busy||!userForm.email||!userForm.displayName} onClick={()=>act("upsertUser",{...userForm,studentId:Number(userForm.studentId)||null},"Kullanıcı ve yetkisi kaydedildi.")}>Kullanıcıyı kaydet / güncelle</button>
-            <div className="user-list">{users.map((user)=><span key={user.id}><strong>{user.displayName}</strong><small>{user.email} · {user.role}</small></span>)}</div>
-            <p className="muted">Parola uygulamada saklanmaz; güvenli oturum açma sağlayıcısı kullanılır.</p>
+            <label>
+              Ad soyad
+              <input
+                value={userForm.displayName}
+                onChange={(e) =>
+                  setUserForm({ ...userForm, displayName: e.target.value })
+                }
+              />
+            </label>
+            <label>
+              Giriş e-postası
+              <input
+                type="email"
+                value={userForm.email}
+                onChange={(e) =>
+                  setUserForm({ ...userForm, email: e.target.value })
+                }
+              />
+            </label>
+            <label>
+              Yetki
+              <select
+                value={userForm.role}
+                onChange={(e) =>
+                  setUserForm({ ...userForm, role: e.target.value })
+                }
+              >
+                <option value="admin">Yönetici</option>
+                <option value="staff">Kütüphane görevlisi</option>
+                <option value="student">Öğrenci</option>
+              </select>
+            </label>
+            {userForm.role === "student" && (
+              <label>
+                Öğrenci kaydı
+                <select
+                  value={userForm.studentId}
+                  onChange={(e) =>
+                    setUserForm({ ...userForm, studentId: e.target.value })
+                  }
+                >
+                  <option value="">Seçin…</option>
+                  {students.map((x) => (
+                    <option key={x.id} value={x.id}>
+                      {x.studentNo} · {x.fullName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <button
+              className="primary"
+              disabled={busy || !userForm.email || !userForm.displayName}
+              onClick={() =>
+                act(
+                  "upsertUser",
+                  {
+                    ...userForm,
+                    studentId: Number(userForm.studentId) || null,
+                  },
+                  "Kullanıcı ve yetkisi kaydedildi.",
+                )
+              }
+            >
+              Kullanıcıyı kaydet / güncelle
+            </button>
+            <div className="user-list">
+              {users.map((user) => (
+                <span key={user.id}>
+                  <strong>{user.displayName}</strong>
+                  <small>
+                    {user.email} · {user.role}
+                  </small>
+                </span>
+              ))}
+            </div>
+            <p className="muted">
+              Parola uygulamada saklanmaz; güvenli oturum açma sağlayıcısı
+              kullanılır.
+            </p>
           </div>
         </Card>
         <Card title="E-posta Hesabı">
@@ -1860,13 +2165,43 @@ function BookForm({
           {label}
           <input
             type={key === "pages" ? "number" : "text"}
+            list={key === "genre" ? "genre-options" : undefined}
             value={String(f[key as keyof typeof f] ?? "")}
             onChange={(e) => setF({ ...f, [key]: e.target.value })}
           />
         </label>
       ))}
-      <label className="check-label"><input type="checkbox" checked={f.blocked} onChange={(e)=>setF({...f,blocked:e.target.checked})}/>Bu öğrenciye kitap verilmesin</label>
-      {f.blocked&&<label>Engel nedeni<select value={f.blockReason} onChange={(e)=>setF({...f,blockReason:e.target.value})}><option value="">Neden seçin…</option><option>Çok geç iade</option><option>Kitaba zarar verme</option><option>Uygunsuz davranış</option><option>Ödenmemiş gecikme bedeli</option><option>Yönetici kararı</option></select></label>}
+      <datalist id="genre-options">
+        <option value="İNGİLİZ EDEBİYATI" />
+        <option value="FRANSIZ EDEBİYATI" />
+        <option value="ŞİİR" />
+        <option value="DENEME MAKALE" />
+        <option value="TÜRK ROMAN HİKAYE" />
+      </datalist>
+      <label className="check-label">
+        <input
+          type="checkbox"
+          checked={f.blocked}
+          onChange={(e) => setF({ ...f, blocked: e.target.checked })}
+        />
+        Bu öğrenciye kitap verilmesin
+      </label>
+      {f.blocked && (
+        <label>
+          Engel nedeni
+          <select
+            value={f.blockReason}
+            onChange={(e) => setF({ ...f, blockReason: e.target.value })}
+          >
+            <option value="">Neden seçin…</option>
+            <option>Çok geç iade</option>
+            <option>Kitaba zarar verme</option>
+            <option>Uygunsuz davranış</option>
+            <option>Ödenmemiş gecikme bedeli</option>
+            <option>Yönetici kararı</option>
+          </select>
+        </label>
+      )}
       <div className="form-actions">
         {onDelete && (
           <button
@@ -1907,7 +2242,15 @@ function StudentForm({
           blocked: Boolean(initial.blocked),
           blockReason: initial.blockReason,
         }
-      : { studentNo: "", fullName: "", grade: "", contact: "", email: "", blocked:false, blockReason:"" },
+      : {
+          studentNo: "",
+          fullName: "",
+          grade: "",
+          contact: "",
+          email: "",
+          blocked: false,
+          blockReason: "",
+        },
   );
   return (
     <form

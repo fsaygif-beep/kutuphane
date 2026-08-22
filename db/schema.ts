@@ -51,6 +51,7 @@ export const settings = sqliteTable("settings", {
   extensionDays: integer("extension_days").notNull().default(7),
   maxRenewals: integer("max_renewals").notNull().default(1),
   dailyFine: integer("daily_fine").notNull().default(0),
+  logoKey: text("logo_key").notNull().default(""),
 });
 
 export const appUsers = sqliteTable("app_users", {
