@@ -350,7 +350,7 @@ export default function LibraryApp() {
             active={activeLoans}
             overdue={overdue}
             setTab={setTab}
-            student={role === "student"}
+            role={role}
           />
         )}
         {tab === "circulation" && (
@@ -423,20 +423,22 @@ function Dashboard({
   active,
   overdue,
   setTab,
-  student,
+  role,
 }: {
   stats: (string | number)[][];
   active: Loan[];
   overdue: Loan[];
   setTab: (t: Tab) => void;
-  student: boolean;
+  role: string;
 }) {
+  const student = role === "student";
+  const staff = role === "staff";
   return (
     <section>
       <div className="page-head">
         <div>
-          <h2>Genel Bakış</h2>
-          <p>Kütüphanenizin bugünkü durumunu tek bakışta görün.</p>
+          <h2>{student ? "Öğrenci Paneli" : staff ? "Kütüphane Sorumlusu Paneli" : "Yönetici Paneli"}</h2>
+          <p>{student ? "Okuduğunuz kitapları, teslim tarihlerini ve okul kataloğunu izleyin." : staff ? "Günlük ödünç, iade, sayım ve öğrenci işlemlerini yönetin." : "Kütüphanenizin bugünkü durumunu ve yönetim araçlarını tek bakışta görün."}</p>
         </div>
         <button
           className="primary"
@@ -451,11 +453,11 @@ function Dashboard({
           alt="Kütüphanede kitap okuyan öğrenciler"
         />
         <div>
-          <small>OKUMA İLHAMI</small>
+          <small>{student ? "BUGÜN NE OKUSAM?" : staff ? "SORUMLU ÇALIŞMA ALANI" : "OKUMA İLHAMI"}</small>
           <blockquote>
-            “Bir kitap, insanın kendine yaptığı en güzel yatırımdır.”
+            {student ? "“İyi bir kitap, yeni bir dünyaya açılan kapıdır.”" : staff ? "“Doğru kitapla buluşan her öğrenci yeni bir yol keşfeder.”" : "“Bir kitap, insanın kendine yaptığı en güzel yatırımdır.”"}
           </blockquote>
-          <p>Bugün bir öğrenciye doğru kitabı ulaştırın.</p>
+          <p>{student ? "Kataloğu inceleyin veya size uygun bir kitap isteyin." : "Bugün bir öğrenciye doğru kitabı ulaştırın."}</p>
         </div>
       </div>
       <div className="stats">
@@ -473,8 +475,8 @@ function Dashboard({
       <div className="grid-2">
         <Card
           title="Aktif Ödünçler"
-          action="Tüm işlemler"
-          onAction={() => setTab("circulation")}
+          action={student ? "Kitapları aç" : "Tüm işlemler"}
+          onAction={() => setTab(student ? "books" : "circulation")}
         >
           <LoanTable rows={active.slice(0, 6)} showReturn={false} />
         </Card>
@@ -1798,6 +1800,12 @@ function Settings({
     { id: "navy", name: "Akademik", hint: "Trebuchet + Segoe UI" },
     { id: "plum", name: "Edebiyat", hint: "Palatino + Verdana" },
     { id: "sand", name: "Klasik", hint: "Garamond + Tahoma" },
+    { id: "ocean", name: "Okyanus", hint: "Arial + Georgia" },
+    { id: "ruby", name: "Yakut", hint: "Segoe UI + Cambria" },
+    { id: "slate", name: "Antrasit", hint: "Roboto + Trebuchet" },
+    { id: "teal", name: "Turkuaz", hint: "Verdana + Georgia" },
+    { id: "indigo", name: "İndigo", hint: "Segoe UI + Palatino" },
+    { id: "rose", name: "Gül", hint: "Tahoma + Cambria" },
   ];
   const chooseTheme = (theme: string) => {
     setForm({ ...form, theme });

@@ -871,7 +871,7 @@ export async function POST(request: Request) {
       const libraryName = String(body.libraryName ?? "").trim();
       const schoolYear = String(body.schoolYear ?? "").trim();
       const loanDays = Math.max(1, Number(body.loanDays) || 15);
-      const theme = ["forest", "navy", "plum", "sand"].includes(
+      const theme = ["forest", "navy", "plum", "sand", "ocean", "ruby", "slate", "teal", "indigo", "rose"].includes(
         String(body.theme),
       )
         ? String(body.theme)
