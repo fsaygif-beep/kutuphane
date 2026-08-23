@@ -2,16 +2,19 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Çankırı Lisesi Kütüphanesi",
+  metadataBase: new URL("https://www.okulkutuphanesi.com"),
+  title: "Okul Kütüphane Otomasyonu",
   description: "Öğrenci, kitap, ödünç, iade, gecikme ve okuma raporlarını tek panelde yönetin.",
+  alternates: { canonical: "/" },
   openGraph: {
-    title: "Çankırı Lisesi Kütüphanesi",
+    title: "Okul Kütüphane Otomasyonu",
     description: "Kitaplar, öğrenciler ve okuma kültürü tek merkezde.",
-    images: [{ url: "/og.png", width: 1200, height: 630, alt: "Çankırı Lisesi Kütüphanesi" }],
+    url: "/",
+    images: [{ url: "/og.png", width: 1200, height: 630, alt: "Okul Kütüphane Otomasyonu" }],
   },
   twitter: {
     card: "summary_large_image",
-    title: "Çankırı Lisesi Kütüphanesi",
+    title: "Okul Kütüphane Otomasyonu",
     description: "Kitaplar, öğrenciler ve okuma kültürü tek merkezde.",
     images: ["/og.png"],
   },
