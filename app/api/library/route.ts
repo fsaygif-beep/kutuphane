@@ -8,6 +8,7 @@ import {
   books,
   emailLogs,
   loans,
+  membershipRequests,
   settings,
   studentChanges,
   students,
@@ -21,6 +22,10 @@ const plusDays = (date: string, days: number) => {
 };
 const authorShelf = (author: string) =>
   (author.trim().split(/\s+/).at(-1)?.[0] ?? "").toLocaleUpperCase("tr");
+const normalized = (value: unknown) =>
+  String(value ?? "").trim().replace(/\s+/g, " ").toLocaleUpperCase("tr");
+const viewerEmail = (request: Request) =>
+  (request.headers.get("oai-authenticated-user-email") ?? "").trim().toLowerCase();
 
 function failure(error: unknown) {
   console.error("library api error", error);
@@ -30,13 +35,19 @@ function failure(error: unknown) {
 export async function GET(request: Request) {
   try {
     const db = getDb();
-    const identity = await getAppIdentity(request, true);
-    if (!identity)
-      return Response.json(
-        { error: "Bu hesap için kütüphane erişimi tanımlanmamış." },
-        { status: 403 },
-      );
     const [config] = await db.select().from(settings).where(eq(settings.id, 1));
+    const identity = await getAppIdentity(request);
+    if (!identity) {
+      const email = viewerEmail(request);
+      if (!email) return Response.json({ error: "Oturum bulunamadı." }, { status: 401 });
+      const [pending] = await db.select().from(membershipRequests).where(eq(membershipRequests.email, email));
+      return Response.json({
+        access: "unregistered",
+        viewerEmail: email,
+        school: config ? { city: config.city, district: config.district, schoolName: config.schoolName || config.libraryName } : null,
+        membershipRequest: pending ?? null,
+      });
+    }
     const studentRows = await db
       .select()
       .from(students)
@@ -86,12 +97,20 @@ export async function GET(request: Request) {
       .select()
       .from(appUsers)
       .orderBy(appUsers.displayName);
+    const membershipRows = identity.role === "admin"
+      ? await db.select().from(membershipRequests).orderBy(desc(membershipRequests.id))
+      : [];
     const ownStudentId =
       identity.role === "student" ? identity.studentId : null;
     return Response.json({
+      access: "granted",
       settings: config ?? {
         id: 1,
         libraryName: "Okul Kütüphanesi",
+        city: "",
+        district: "",
+        schoolName: "",
+        institutionCode: "",
         schoolYear: "2026-2027",
         loanDays: 15,
         theme: "forest",
@@ -113,6 +132,7 @@ export async function GET(request: Request) {
         ? requestRows.filter((x) => x.studentId === ownStudentId)
         : requestRows,
       users: identity.role === "admin" ? userRows : [],
+      membershipRequests: membershipRows,
       currentUser: identity,
       today: isoDate(),
     });
@@ -127,7 +147,30 @@ export async function POST(request: Request) {
     const body = (await request.json()) as Record<string, unknown>;
     const action = String(body.action ?? "");
     const now = new Date().toISOString();
-    const identity = await getAppIdentity(request, true);
+    const identity = await getAppIdentity(request);
+    if (!identity && action === "submitMembershipRequest") {
+      const email = viewerEmail(request);
+      const [config] = await db.select().from(settings).where(eq(settings.id, 1));
+      if (!email || !config) return Response.json({ error: "Okul veya oturum bilgisi bulunamadı." }, { status: 400 });
+      const [student] = await db.select().from(students).where(eq(students.studentNo, String(body.studentNo ?? "").trim()));
+      const matches = student &&
+        normalized(body.city) === normalized(config.city) &&
+        normalized(body.district) === normalized(config.district) &&
+        normalized(body.schoolName) === normalized(config.schoolName || config.libraryName) &&
+        normalized(body.fullName) === normalized(student.fullName) &&
+        normalized(body.grade) === normalized(student.grade);
+      if (!matches) return Response.json({ error: "Bilgiler okul kayıtlarıyla eşleşmedi. Lütfen okul yönetimine başvurun." }, { status: 400 });
+      await db.insert(membershipRequests).values({
+        email, city: String(body.city), district: String(body.district), schoolName: String(body.schoolName),
+        fullName: student.fullName, grade: student.grade, studentNo: student.studentNo,
+        matchedStudentId: student.id, status: "pending", createdAt: now,
+      }).onConflictDoUpdate({ target: membershipRequests.email, set: {
+        city: String(body.city), district: String(body.district), schoolName: String(body.schoolName),
+        fullName: student.fullName, grade: student.grade, studentNo: student.studentNo,
+        matchedStudentId: student.id, status: "pending", createdAt: now, reviewedAt: null,
+      }});
+      return Response.json({ ok: true });
+    }
     if (!identity)
       return Response.json(
         { error: "Oturum veya kullanıcı yetkisi bulunamadı." },
@@ -141,6 +184,8 @@ export async function POST(request: Request) {
       "deleteGrade",
       "promoteGrades",
       "seed",
+      "approveMembership",
+      "rejectMembership",
     ]);
     if (adminOnly.has(action) && identity.role !== "admin")
       return Response.json(
@@ -163,11 +208,27 @@ export async function POST(request: Request) {
 
     if (action === "noop") return Response.json({ ok: true });
 
+    if (action === "approveMembership" || action === "rejectMembership") {
+      const id = Number(body.id);
+      const [row] = await db.select().from(membershipRequests).where(eq(membershipRequests.id, id));
+      if (!row) return Response.json({ error: "Başvuru bulunamadı." }, { status: 404 });
+      if (action === "approveMembership") {
+        await db.insert(appUsers).values({ email: row.email, displayName: row.fullName, role: "student", studentId: row.matchedStudentId, active: 1, createdAt: now })
+          .onConflictDoUpdate({ target: appUsers.email, set: { displayName: row.fullName, role: "student", studentId: row.matchedStudentId, active: 1 } });
+      }
+      await db.update(membershipRequests).set({ status: action === "approveMembership" ? "approved" : "rejected", reviewedAt: now }).where(eq(membershipRequests.id, id));
+      return Response.json({ ok: true });
+    }
+
     if (action === "seed") {
       await db
         .insert(settings)
         .values({
           id: 1,
+          city: "",
+          district: "",
+          schoolName: "Atatürk Anadolu Lisesi",
+          institutionCode: "",
           libraryName: "Atatürk Anadolu Lisesi Kütüphanesi",
           schoolYear: "2026-2027",
           loanDays: 15,
@@ -803,6 +864,10 @@ export async function POST(request: Request) {
     }
 
     if (action === "settings") {
+      const city = String(body.city ?? "").trim();
+      const district = String(body.district ?? "").trim();
+      const schoolName = String(body.schoolName ?? "").trim();
+      const institutionCode = String(body.institutionCode ?? "").trim();
       const libraryName = String(body.libraryName ?? "").trim();
       const schoolYear = String(body.schoolYear ?? "").trim();
       const loanDays = Math.max(1, Number(body.loanDays) || 15);
@@ -820,6 +885,10 @@ export async function POST(request: Request) {
         .insert(settings)
         .values({
           id: 1,
+          city,
+          district,
+          schoolName,
+          institutionCode,
           libraryName,
           schoolYear,
           loanDays,
@@ -833,6 +902,10 @@ export async function POST(request: Request) {
         .onConflictDoUpdate({
           target: settings.id,
           set: {
+            city,
+            district,
+            schoolName,
+            institutionCode,
             libraryName,
             schoolYear,
             loanDays,

@@ -67,8 +67,14 @@ type AppUser = {
   studentId: number | null;
   active: number;
 };
+type MembershipRequest = { id: number; email: string; fullName: string; grade: string; studentNo: string; city: string; district: string; schoolName: string; status: string; createdAt: string };
 type Data = {
+  access: "granted";
   settings: {
+    city: string;
+    district: string;
+    schoolName: string;
+    institutionCode: string;
     libraryName: string;
     schoolYear: string;
     loanDays: number;
@@ -85,9 +91,11 @@ type Data = {
   loans: Loan[];
   requests: BookRequest[];
   users: AppUser[];
+  membershipRequests: MembershipRequest[];
   currentUser: AppUser | null;
   today: string;
 };
+type UnregisteredData = { access: "unregistered"; viewerEmail: string; school: { city: string; district: string; schoolName: string } | null; membershipRequest: MembershipRequest | null };
 type Tab =
   | "dashboard"
   | "circulation"
@@ -172,17 +180,48 @@ function pick(row: Record<string, unknown>, names: string[]) {
   return entry?.[1] ?? "";
 }
 
+function MembershipSignup({ data, busy, act }: { data: UnregisteredData; busy: boolean; act: (a: string, p: Record<string, unknown>, s: string) => Promise<void> }) {
+  const school = data.school;
+  const [form, setForm] = useState({ city: school?.city ?? "", district: school?.district ?? "", schoolName: school?.schoolName ?? "", fullName: "", grade: "", studentNo: "" });
+  const pending = data.membershipRequest?.status === "pending";
+  return (
+    <main className="signup-page">
+      <section className="signup-card">
+        <div className="mark">K</div>
+        <p className="eyebrow">Güvenli öğrenci erişimi</p>
+        <h1>Öğrenci üyelik talebi</h1>
+        <p className="muted">Bilgileriniz okulun öğrenci kaydıyla eşleşirse başvurunuz yönetici onayına gönderilir.</p>
+        {pending ? (
+          <div className="pending-box"><strong>Başvurunuz inceleniyor</strong><p>{data.viewerEmail} hesabıyla yaptığınız talep okul yöneticisinin onayını bekliyor.</p></div>
+        ) : (
+          <div className="form-grid one">
+            <label>Şehir<input value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} /></label>
+            <label>İlçe<input value={form.district} onChange={(e) => setForm({ ...form, district: e.target.value })} /></label>
+            <label>Okul adı<input value={form.schoolName} onChange={(e) => setForm({ ...form, schoolName: e.target.value })} /></label>
+            <label>Adı soyadı<input value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} /></label>
+            <div className="form-grid two"><label>Sınıf<input value={form.grade} onChange={(e) => setForm({ ...form, grade: e.target.value })} placeholder="9-A" /></label><label>Öğrenci no<input value={form.studentNo} onChange={(e) => setForm({ ...form, studentNo: e.target.value })} /></label></div>
+            <button className="primary" disabled={busy || Object.values(form).some((x) => !x.trim())} onClick={() => act("submitMembershipRequest", form, "Başvurunuz yönetici onayına gönderildi.")}>Üyelik talebi gönder</button>
+          </div>
+        )}
+        <a className="signout-link" href="/signout-with-chatgpt?return_to=/">Farklı hesapla giriş yap</a>
+      </section>
+    </main>
+  );
+}
+
 export default function LibraryApp() {
   const [tab, setTab] = useState<Tab>("dashboard");
-  const [data, setData] = useState<Data | null>(null);
+  const [data, setData] = useState<Data | UnregisteredData | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const load = useCallback(async () => {
     const response = await fetch("/api/library", { cache: "no-store" });
     if (!response.ok) throw new Error("Veriler yüklenemedi.");
-    setData((await response.json()) as Data);
+    setData((await response.json()) as Data | UnregisteredData);
   }, []);
   useEffect(() => {
+    // Initial network synchronization; state changes only after the response resolves.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void load().catch((error) => setNotice(error.message));
   }, [load]);
   const act = async (
@@ -210,6 +249,8 @@ export default function LibraryApp() {
         <p>{notice || "Kütüphane hazırlanıyor…"}</p>
       </main>
     );
+  if (data.access === "unregistered")
+    return <MembershipSignup data={data} busy={busy} act={act} />;
   const activeLoans = data.loans.filter((x) => !x.returnedAt);
   const overdue = activeLoans.filter((x) => x.dueAt < data.today);
   const available = data.books.filter(
@@ -366,6 +407,7 @@ export default function LibraryApp() {
             config={data.settings}
             students={data.students}
             users={data.users}
+            membershipRequests={data.membershipRequests}
             empty={!data.books.length && !data.students.length}
             busy={busy}
             act={act}
@@ -471,8 +513,20 @@ function Circulation({
   busy: boolean;
   act: (a: string, p: Record<string, unknown>, s: string) => Promise<void>;
 }) {
-  const [studentId, setStudentId] = useState("");
-  const [bookId, setBookId] = useState("");
+  const [studentQuery, setStudentQuery] = useState("");
+  const [bookQuery, setBookQuery] = useState("");
+  const normalize = (value: string) => value.trim().toLocaleUpperCase("tr");
+  const selectedStudent = students.find((x) =>
+    [x.studentNo, `${x.studentNo} · ${x.fullName} · ${x.grade}`].some((v) => normalize(v) === normalize(studentQuery)),
+  );
+  const selectedBook = books.find((x) =>
+    [x.inventoryNo, x.isbn, `${x.inventoryNo} · ${x.title} · ${x.author}`].some((v) => normalize(v) === normalize(bookQuery)),
+  );
+  const lend = async () => {
+    if (!selectedStudent || !selectedBook) return;
+    await act("loan", { studentId: selectedStudent.id, bookId: selectedBook.id }, "Kitap ödünç verildi.");
+    setBookQuery("");
+  };
   return (
     <section>
       <PageHead
@@ -484,48 +538,25 @@ function Circulation({
           <div className="step">
             <b>1</b>
             <label>
-              Öğrenci seç
-              <select
-                value={studentId}
-                onChange={(e) => setStudentId(e.target.value)}
-              >
-                <option value="">Öğrenci no veya ad…</option>
-                {students.map((x) => (
-                  <option key={x.id} value={x.id}>
-                    {x.studentNo} · {x.fullName} · {x.grade}
-                  </option>
-                ))}
-              </select>
+              QR / Öğrenci No / Ad Soyad
+              <input list="student-options" value={studentQuery} onChange={(e) => setStudentQuery(e.target.value)} placeholder="QR okutun veya yazmaya başlayın…" autoComplete="off" />
+              <datalist id="student-options">{students.map((x) => <option key={x.id} value={`${x.studentNo} · ${x.fullName} · ${x.grade}`} />)}</datalist>
+              {selectedStudent && <small className="match-ok">✓ {selectedStudent.fullName} · {selectedStudent.grade}</small>}
             </label>
           </div>
           <div className="step">
             <b>2</b>
             <label>
-              Kitap seç
-              <select
-                value={bookId}
-                onChange={(e) => setBookId(e.target.value)}
-              >
-                <option value="">DN, ISBN veya kitap adı…</option>
-                {books.map((x) => (
-                  <option key={x.id} value={x.id}>
-                    {x.inventoryNo} · {x.title} · {x.author}
-                  </option>
-                ))}
-              </select>
+              QR / DN / ISBN / Kitap Adı
+              <input list="book-options" value={bookQuery} onChange={(e) => setBookQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void lend(); }} placeholder="QR okutun veya yazmaya başlayın…" autoComplete="off" />
+              <datalist id="book-options">{books.map((x) => <option key={x.id} value={`${x.inventoryNo} · ${x.title} · ${x.author}`} />)}</datalist>
+              {selectedBook && <small className="match-ok">✓ {selectedBook.title} · {selectedBook.author}</small>}
             </label>
           </div>
           <button
             className="primary full"
-            disabled={busy || !studentId || !bookId}
-            onClick={async () => {
-              await act(
-                "loan",
-                { studentId: Number(studentId), bookId: Number(bookId) },
-                "Kitap ödünç verildi.",
-              );
-              setBookId("");
-            }}
+            disabled={busy || !selectedStudent || !selectedBook}
+            onClick={() => void lend()}
           >
             Ödünç ver
           </button>
@@ -1738,6 +1769,7 @@ function Settings({
   config,
   students,
   users,
+  membershipRequests,
   empty,
   busy,
   act,
@@ -1745,6 +1777,7 @@ function Settings({
   config: Data["settings"];
   students: Student[];
   users: AppUser[];
+  membershipRequests: MembershipRequest[];
   empty: boolean;
   busy: boolean;
   act: (a: string, p: Record<string, unknown>, s: string) => Promise<void>;
@@ -1768,7 +1801,7 @@ function Settings({
   ];
   const chooseTheme = (theme: string) => {
     setForm({ ...form, theme });
-    document.documentElement.dataset.theme = theme;
+    document.documentElement.setAttribute("data-theme", theme);
   };
   const changeLogo = async (file: File) => {
     try {
@@ -1787,6 +1820,10 @@ function Settings({
       <div className="grid-2">
         <Card title="Genel Ayarlar">
           <div className="form-grid one">
+            <label>Şehir<input value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} /></label>
+            <label>İlçe<input value={form.district} onChange={(e) => setForm({ ...form, district: e.target.value })} /></label>
+            <label>Okul adı<input value={form.schoolName} onChange={(e) => setForm({ ...form, schoolName: e.target.value })} /></label>
+            <label>Kurum kodu<input value={form.institutionCode} onChange={(e) => setForm({ ...form, institutionCode: e.target.value })} /></label>
             <label>
               Kütüphane adı
               <input
@@ -1825,6 +1862,17 @@ function Settings({
             >
               Ayarları kaydet
             </button>
+          </div>
+        </Card>
+        <Card title={`Öğrenci Üyelik Başvuruları (${membershipRequests.filter((x) => x.status === "pending").length})`}>
+          <div className="approval-list">
+            {membershipRequests.filter((x) => x.status === "pending").map((row) => (
+              <article key={row.id}>
+                <div><strong>{row.fullName}</strong><small>{row.grade} · No {row.studentNo} · {row.email}</small><small>{row.city} / {row.district} · {row.schoolName}</small></div>
+                <div className="actions"><button className="small" disabled={busy} onClick={() => act("rejectMembership", { id: row.id }, "Başvuru reddedildi.")}>Reddet</button><button className="primary small" disabled={busy} onClick={() => act("approveMembership", { id: row.id }, "Öğrenci hesabı onaylandı.")}>Onayla</button></div>
+              </article>
+            ))}
+            {!membershipRequests.some((x) => x.status === "pending") && <p className="empty">Bekleyen üyelik başvurusu yok.</p>}
           </div>
         </Card>
         <Card title="Okul Logosu">

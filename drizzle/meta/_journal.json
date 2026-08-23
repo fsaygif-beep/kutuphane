@@ -43,6 +43,13 @@
       "when": 1787442088396,
       "tag": "0005_remarkable_fantastic_four",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1787443858590,
+      "tag": "0006_glorious_starbolt",
+      "breakpoints": true
     }
   ]
 }

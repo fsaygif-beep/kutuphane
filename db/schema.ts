@@ -42,6 +42,10 @@ export const loans = sqliteTable("loans", {
 
 export const settings = sqliteTable("settings", {
   id: integer("id").primaryKey(),
+  city: text("city").notNull().default(""),
+  district: text("district").notNull().default(""),
+  schoolName: text("school_name").notNull().default(""),
+  institutionCode: text("institution_code").notNull().default(""),
   libraryName: text("library_name").notNull(),
   schoolYear: text("school_year").notNull(),
   loanDays: integer("loan_days").notNull().default(15),
@@ -52,6 +56,21 @@ export const settings = sqliteTable("settings", {
   maxRenewals: integer("max_renewals").notNull().default(1),
   dailyFine: integer("daily_fine").notNull().default(0),
   logoKey: text("logo_key").notNull().default(""),
+});
+
+export const membershipRequests = sqliteTable("membership_requests", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  email: text("email").notNull().unique(),
+  city: text("city").notNull(),
+  district: text("district").notNull(),
+  schoolName: text("school_name").notNull(),
+  fullName: text("full_name").notNull(),
+  grade: text("grade").notNull(),
+  studentNo: text("student_no").notNull(),
+  matchedStudentId: integer("matched_student_id").notNull(),
+  status: text("status").notNull().default("pending"),
+  createdAt: text("created_at").notNull(),
+  reviewedAt: text("reviewed_at"),
 });
 
 export const appUsers = sqliteTable("app_users", {
