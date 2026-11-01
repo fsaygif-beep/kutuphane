@@ -1,61 +1,42 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, gt } from "drizzle-orm";
 import { getDb } from "../db";
-import { appUsers } from "../db/schema";
+import { appSessions, appUsers } from "../db/schema";
 
 export type AppIdentity = {
   id: number;
   email: string;
   displayName: string;
-  role: "admin" | "staff" | "student";
+  role: "platform_admin" | "admin" | "staff" | "student";
+  permissions: string[];
+  schoolId: number | null;
   studentId: number | null;
   active: number;
 };
 
 export async function getAppIdentity(
   request: Request,
-  bootstrap = false,
 ): Promise<AppIdentity | null> {
-  const email = (request.headers.get("oai-authenticated-user-email") ?? "")
-    .trim()
-    .toLowerCase();
-  if (!email) return null;
+  const token = request.headers.get("cookie")?.match(/(?:^|;\s*)library_session=([^;]+)/)?.[1];
+  if (!token) return null;
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(decodeURIComponent(token)));
+  const tokenHash = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
   const db = getDb();
-  let [user] = await db
-    .select()
-    .from(appUsers)
-    .where(eq(appUsers.email, email));
-  if (!user && bootstrap) {
-    const [total] = await db
-      .select({ count: sql<number>`count(*)` })
-      .from(appUsers);
-    if (Number(total?.count ?? 0) === 0) {
-      const nameHeader = request.headers.get(
-        "oai-authenticated-user-full-name",
-      );
-      let displayName = email;
-      try {
-        if (nameHeader) displayName = decodeURIComponent(nameHeader);
-      } catch {}
-      await db
-        .insert(appUsers)
-        .values({
-          email,
-          displayName,
-          role: "admin",
-          active: 1,
-          createdAt: new Date().toISOString(),
-        });
-      [user] = await db
-        .select()
-        .from(appUsers)
-        .where(eq(appUsers.email, email));
-    }
-  }
+  const [user] = await db.select({
+    id: appUsers.id, email: appUsers.email, displayName: appUsers.displayName,
+    role: appUsers.role, permissions: appUsers.permissions, schoolId: appUsers.schoolId, studentId: appUsers.studentId, active: appUsers.active,
+  }).from(appSessions).innerJoin(appUsers, eq(appSessions.userId, appUsers.id))
+    .where(and(eq(appSessions.tokenHash, tokenHash), gt(appSessions.expiresAt, new Date().toISOString())));
   if (!user || !user.active) return null;
   return {
-    ...user,
+    id: user.id,
+    email: user.email,
+    displayName: user.displayName,
+    studentId: user.studentId,
+    schoolId: user.schoolId,
+    active: user.active,
+    permissions: String(user.permissions ?? "").split(",").map((value) => value.trim()).filter(Boolean),
     role:
-      user.role === "admin" || user.role === "staff" ? user.role : "student",
+      user.role === "platform_admin" || user.role === "admin" || user.role === "staff" ? user.role : "student",
   };
 }
 

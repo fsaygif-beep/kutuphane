@@ -1,0 +1,1 @@
+ALTER TABLE `inventory_entries` ADD `source` text DEFAULT 'manual' NOT NULL;

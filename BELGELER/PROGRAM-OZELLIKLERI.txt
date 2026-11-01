@@ -1,0 +1,56 @@
+ÇOK OKULLU KÜTÜPHANE OTOMASYONU - PROGRAM ÖZELLİKLERİ
+
+1. GİRİŞ VE OKUL EŞLEŞTİRME
+- Ana girişte kurum kodu bulunmaz.
+- Kullanıcılar e-posta veya öğrenci kaydındaki cep telefonu ve parola ile giriş yapar.
+- Sistem hesabın bağlı olduğu okulu otomatik bulur ve doğru kütüphane panelini açar.
+- Kurum kodu yalnızca Öğrenci Üyelik Talebi ve Okul Kullanım Başvurusu formlarında kullanılır.
+- Başvuru hesap kimliği e-postadır; gereksiz kullanıcı adı alanı yoktur.
+- Güvenli parola özeti, oturum yönetimi ve çıkış özelliği bulunur.
+
+2. ÇOK OKULLU YAPI VE ABONELİK
+- Her okulun kitap, üye, kullanıcı ve işlem kayıtları birbirinden ayrıdır.
+- Yeni okullar için 30 günlük deneme durumu izlenir.
+- Süper admin tüm okulları, kayıt tarihini, deneme/kalan gün ve abonelik durumunu görür.
+- Her okul için 365 günlük premium erişim açılıp kapatılabilir.
+- Yetkili hesap IBAN ve yıllık üyelik ücretini yönetebilir.
+
+3. KİTAP VE ÜYE YÖNETİMİ
+- Kitap ekleme, düzenleme, arama, filtreleme, Excel içe/dışa aktarma ve toplu işlemler.
+- DN/demirbaş, ISBN, yazar, yayınevi, kategori, tür, raf, Dewey ve sayfa bilgileri.
+- Öğrenci, öğretmen ve çalışan üyelikleri; fotoğraf, sınıf, iletişim ve engel yönetimi.
+- Öğrenci üyelik taleplerinin yönetici tarafından onaylanması veya reddedilmesi.
+
+4. ÖDÜNÇ, İADE VE GECİKME
+- Barkod/DN/ISBN ile hızlı ödünç ve iade.
+- Ödünç süresi, azami kitap, uzatma sayısı ve gecikme kuralları.
+- Geciken kitap listesi, e-posta bildirimi ve işlem geçmişi.
+- Kitap talepleri ve öğrenci okuma geçmişi.
+
+5. KİTAP SAYIMI VE RAF KONTROLÜ
+- Yeni sayım açarken sayım numarası ve tarih kaydedilir.
+- Aynı numara ve tarihteki sayıma farklı günlerde devam edilebilir.
+- Bir kitap aynı sayımda yalnızca bir kez sayılır; tekrar okutulursa uyarı gösterilir.
+- Sayım sırasında veya sayım listesinden kitabın rafı değiştirilebilir.
+- Sayılan, sayılmayan, rafta, ödünçte ve rafı değişen kitaplar izlenir.
+- İki tarihli sayım karşılaştırılır; yalnız ilk, yalnız ikinci ve iki sayımda bulunan kayıtlar raporlanır.
+- Karşılaştırma raporu CSV olarak indirilebilir.
+
+6. BARKOD VE QR ETİKET ÜRETİMİ
+- Ayarlar > Barkod ve QR bölümünde gerçek Code 128 barkod ve QR kod üretilir.
+- 6-11 haneli numara ve üretilecek adet seçilir.
+- Üretim sırasında kayıtlı DN ve ISBN numaralarıyla çakışma engellenir.
+- Barkod, QR veya ikisi birlikte hazırlanabilir; okunabilir numara barkod altında gösterilir.
+- A4 satır/sütun sayısı, kenar boşluğu, satır/sütun aralığı, kod ve yazı boyutu ayarlanır.
+- Canlı A4 ön izlemesi ile yazdırma veya PDF kaydetme yapılır.
+
+7. RAPORLAR, AYARLAR VE DİĞER ÖZELLİKLER
+- Tarih aralığına göre en çok okuyan üyeler ve en çok okunan kitaplar.
+- Okul logosu ve Genel Bakış görseli yükleme.
+- Tema, renk, yazı tipi ve yazı boyutu ayarları.
+- Eğitim dönemi, sınıf yükseltme, mezun işlemleri ve veri yönetimi.
+- Yönetici, personel ve öğrenci rolleri; modül bazlı personel yetkileri.
+- Yönetici notları ve toplu görsel işlemleri.
+
+KULLANIM NOTU
+Cep telefonu ile giriş, öğrenci hesabına bağlı üye kaydındaki telefon numarasını kullanır. Telefon numarasının üye kaydında doğru ve güncel olması gerekir. Aynı e-posta veya telefon birden fazla okul hesabında kayıtlıysa güvenlik nedeniyle giriş durdurulur ve okul yöneticisine başvurulması istenir.
