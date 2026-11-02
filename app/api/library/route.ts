@@ -1,3 +1,5 @@
+import {circulationDelta} from "../../circulation-delta";
+import {normalizeGrade,validGrade,normalizePhone} from "../../student-rules";
 import { inventorySyncSql, protectedBulkArchiveSql, overdueEmail, deliverOverdueEmail } from "../../library-operations";
 import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
 import { env } from "cloudflare:workers";
@@ -45,7 +47,7 @@ async function derivePassword(password: string, salt: Uint8Array) {
     ["deriveBits"],
   );
   const bits = await crypto.subtle.deriveBits(
-    { name: "PBKDF2", hash: "SHA-256", salt, iterations: 100_000 },
+    { name: "PBKDF2", hash: "SHA-256", salt: new Uint8Array(salt), iterations: 100_000 },
     key,
     256,
   );
@@ -70,6 +72,7 @@ export async function GET(request: Request) {
     const identity = await getAppIdentity(request);
     if (!identity) return Response.json({ error: "Oturum bulunamadı." }, { status: 401 });
     if (identity.role === "platform_admin") return identity.email.toLowerCase() === SUPER_ADMIN_EMAIL ? Response.json({ access: "platform", currentUser: identity }) : Response.json({ error: "Merkez yönetimi yalnızca fsaygif@gmail.com hesabına açıktır." }, { status: 403 });
+    if(identity.role === "student" && !identity.studentId)return Response.json({error:"Öğrenci eşleşmesi bulunamadı."},{status:403});
     const schoolId = identity.schoolId;
     if (!schoolId) return Response.json({ error: "Kullanıcı bir okulla eşleştirilmemiş." }, { status: 403 });
     const subscription = await getSchoolAccess(schoolId);
@@ -79,7 +82,7 @@ export async function GET(request: Request) {
     const studentRows = await db
       .select()
       .from(students)
-      .where(and(eq(students.schoolId, schoolId), eq(students.activeMember, 1)))
+      .where(and(eq(students.schoolId, schoolId), eq(students.activeMember, 1),identity.role === "student" ? eq(students.id,identity.studentId??0) : undefined))
       .orderBy(students.fullName);
     const bookRows = await db.select().from(books).where(and(eq(books.schoolId, schoolId), eq(books.activeInventory, 1))).orderBy(books.title);
     const loanRows = await db
@@ -107,7 +110,7 @@ export async function GET(request: Request) {
       .from(loans)
       .innerJoin(students, eq(loans.studentId, students.id))
       .innerJoin(books, eq(loans.bookId, books.id))
-      .where(eq(loans.schoolId, schoolId))
+      .where(and(eq(loans.schoolId, schoolId),identity.role === "student"?eq(loans.studentId,identity.studentId??0):undefined))
       .orderBy(desc(loans.loanedAt), desc(loans.id));
     const requestRows = await db
       .select({
@@ -123,25 +126,10 @@ export async function GET(request: Request) {
       })
       .from(bookRequests)
       .innerJoin(students, eq(bookRequests.studentId, students.id))
-      .where(eq(bookRequests.schoolId, schoolId))
+      .where(and(eq(bookRequests.schoolId, schoolId),identity.role === "student"?eq(bookRequests.studentId,identity.studentId??0):undefined))
       .orderBy(desc(bookRequests.id));
-    const userRowsRaw = await db
-      .select()
-      .from(appUsers)
-      .where(eq(appUsers.schoolId, schoolId))
-      .orderBy(appUsers.displayName);
-    const userRows = userRowsRaw.map((user) => ({
-      id: user.id,
-      username: user.username ?? user.email,
-      email: user.email,
-      phone: user.phone,
-      displayName: user.displayName,
-      role: user.role,
-      permissions: String(user.permissions ?? "").split(",").map((value) => value.trim()).filter(Boolean),
-      studentId: user.studentId,
-      active: user.active,
-      passwordConfigured: Boolean(user.passwordHash && user.passwordSalt),
-    }));
+    const userRowsRaw = identity.role === "admin" ? await db.select({id:appUsers.id,username:appUsers.username,email:appUsers.email,phone:appUsers.phone,displayName:appUsers.displayName,role:appUsers.role,permissions:appUsers.permissions,studentId:appUsers.studentId,active:appUsers.active,passwordConfigured:sql<number>`CASE WHEN password_hash <> '' AND password_salt <> '' THEN 1 ELSE 0 END`}).from(appUsers).where(eq(appUsers.schoolId,schoolId)).orderBy(appUsers.displayName) : [];
+    const userRows=userRowsRaw.map(user=>({...user,permissions:String(user.permissions??"").split(",").filter(Boolean),passwordConfigured:Boolean(user.passwordConfigured)}));
     const membershipRows = identity.role === "admin"
       ? await db.select().from(membershipRequests).where(eq(membershipRequests.schoolId, schoolId)).orderBy(desc(membershipRequests.id))
       : [];
@@ -153,7 +141,7 @@ export async function GET(request: Request) {
     const staffCanSeeStudents = identity.role !== "staff" || identity.permissions.some((permission) => ["students", "circulation", "overdue", "reports"].includes(permission));
     const staffCanSeeBooks = identity.role !== "staff" || identity.permissions.some((permission) => ["books", "circulation", "inventory", "reports"].includes(permission));
     const staffCanSeeRequests = identity.role !== "staff" || identity.permissions.includes("requests");
-    const staffCanSeeInventory = identity.role !== "staff" || identity.permissions.includes("inventory");
+    const staffCanSeeInventory = identity.role === "admin" || identity.role === "staff" && identity.permissions.includes("inventory");
     const inventorySessionRows = staffCanSeeInventory ? await db.select().from(inventorySessions).where(eq(inventorySessions.schoolId, schoolId)).orderBy(desc(inventorySessions.countDate), desc(inventorySessions.id)) : [];
     const inventoryEntryRows = staffCanSeeInventory ? await db.select().from(inventoryEntries).where(eq(inventoryEntries.schoolId, schoolId)).orderBy(desc(inventoryEntries.countedAt), desc(inventoryEntries.id)) : [];
     return Response.json({
@@ -199,15 +187,13 @@ export async function GET(request: Request) {
         ? requestRows.filter((x) => x.studentId === ownStudentId)
         : staffCanSeeRequests ? requestRows : [],
       users: identity.role === "admin" ? userRows : [],
-      membershipRequests: membershipRows,
+      membershipRequests: membershipRows.map(({passwordHash,passwordSalt,...row})=>row),
       notes: noteRows,
       inventorySessions: inventorySessionRows,
       inventoryEntries: inventoryEntryRows,
       currentUser: {
         ...identity,
-        passwordConfigured: Boolean(
-          userRowsRaw.find((user) => user.id === identity.id)?.passwordHash,
-        ),
+        passwordConfigured: true,
       },
       subscription: { exempt: subscription.exempt, premium: subscription.premium, trial: subscription.trial, remainingDays: subscription.remainingDays },
       canManageSubscription,
@@ -258,6 +244,7 @@ export async function POST(request: Request) {
       "addNote",
       "toggleNote",
       "deleteNote",
+      "deleteBookRequest",
     ]);
     if (adminOnly.has(action) && identity.role !== "admin")
       return Response.json(
@@ -271,7 +258,7 @@ export async function POST(request: Request) {
     }
     if (
       identity.role === "student" &&
-      !new Set(["addBookRequest", "noop"]).has(action)
+      !new Set(["addBookRequest", "setAdminPassword", "noop"]).has(action)
     )
       return Response.json(
         { error: "Öğrenci hesabının bu işlem için yetkisi yoktur." },
@@ -283,6 +270,10 @@ export async function POST(request: Request) {
         { status: 403 },
       );
 
+    if(action === "deleteBookRequest") {
+      await db.delete(bookRequests).where(and(eq(bookRequests.schoolId,schoolId),eq(bookRequests.id,Number(body.id))));
+      return Response.json({ok:true});
+    }
     if (action === "noop") return Response.json({ ok: true });
 
     if (action === "addNote") {
@@ -309,15 +300,23 @@ export async function POST(request: Request) {
     if (action === "approveMembership" || action === "rejectMembership") {
       const id = Number(body.id);
       const [row] = await db.select().from(membershipRequests).where(and(eq(membershipRequests.id, id), eq(membershipRequests.schoolId, schoolId)));
-      if (!row) return Response.json({ error: "Başvuru bulunamadı." }, { status: 404 });
+      if (!row || row.status !== "pending") return Response.json({ error: "Bekleyen başvuru bulunamadı." }, { status: 404 });
       if (action === "approveMembership") {
         if (!row.username || !row.passwordHash || !row.passwordSalt)
           return Response.json({ error: "Bu eski başvuruda kullanıcı adı/parola yok. Öğrenciden yeniden başvuru yapmasını isteyin." }, { status: 409 });
-        const [duplicate] = await db.select({ id: appUsers.id }).from(appUsers).where(and(eq(appUsers.schoolId, schoolId), or(eq(appUsers.username, row.username), eq(appUsers.email, row.email))));
+        const [duplicate] = await db.select({ id: appUsers.id }).from(appUsers).where(and(eq(appUsers.schoolId, schoolId), or(eq(appUsers.username, row.username), eq(appUsers.email, row.email),eq(appUsers.studentId,row.matchedStudentId))));
         if (duplicate) return Response.json({ error: "Bu kullanıcı adı veya e-posta ile hesap zaten var." }, { status: 409 });
-        await db.insert(appUsers).values({ schoolId, username: row.username, email: row.email, displayName: row.fullName, role: "student", permissions: "", studentId: row.matchedStudentId, active: 1, passwordHash: row.passwordHash, passwordSalt: row.passwordSalt, passwordUpdatedAt: now, createdAt: now });
+        if(row.phone) {
+          const phones=await db.select({phone:appUsers.phone}).from(appUsers).where(eq(appUsers.schoolId,schoolId));
+          if(phones.some(u=>normalizePhone(u.phone)===normalizePhone(row.phone)))return Response.json({error:"Bu cep telefonu başka bir hesapta kayıtlıdır."},{status:409});
+        }
+        await db.batch([db.insert(appUsers).values({ schoolId, username: row.username, email: row.email, phone: row.phone, displayName: row.fullName, role: "student", permissions: "", studentId: row.matchedStudentId, active: 1, passwordHash: row.passwordHash, passwordSalt: row.passwordSalt, passwordUpdatedAt: now, createdAt: now }),
+          db.update(students).set({email:row.email,...(row.phone?{contact:row.phone}:{})}).where(and(eq(students.id,row.matchedStudentId),eq(students.schoolId,schoolId))),
+          db.update(membershipRequests).set({status:"approved",reviewedAt:now}).where(and(eq(membershipRequests.id,id),eq(membershipRequests.schoolId,schoolId))),
+        ]);
+        return Response.json({ok:true});
       }
-      await db.update(membershipRequests).set({ status: action === "approveMembership" ? "approved" : "rejected", reviewedAt: now }).where(and(eq(membershipRequests.id, id), eq(membershipRequests.schoolId, schoolId)));
+      await db.update(membershipRequests).set({ status: "rejected", reviewedAt: now }).where(and(eq(membershipRequests.id, id), eq(membershipRequests.schoolId, schoolId)));
       return Response.json({ ok: true });
     }
 
@@ -422,10 +421,12 @@ export async function POST(request: Request) {
     }
 
     if (action === "addStudent") {
-      const studentNo = String(body.studentNo ?? "").trim();
+      const memberType = ["teacher","employee"].includes(String(body.memberType))?String(body.memberType):"student";
+      const studentNo = memberType === "student" ? String(body.studentNo??"").trim() : String(body.studentNo??"").trim() || `MEM-${crypto.randomUUID()}`;
       const fullName = String(body.fullName ?? "").trim();
-      const grade = String(body.grade ?? "").trim();
-      if (!studentNo || !fullName || !grade)
+      const grade = memberType === "student" ? normalizeGrade(body.grade) : "";
+      if(memberType === "student" && !validGrade(grade))return Response.json({error:"Sınıf ve şube boşluksuz olmalıdır. Örnek: 9A, 10B."},{status:400});
+      if (!studentNo || !fullName || (memberType === "student" && !grade))
         return Response.json(
           { error: "Öğrenci no, ad soyad ve sınıf zorunludur." },
           { status: 400 },
@@ -446,7 +447,7 @@ export async function POST(request: Request) {
         grade,
         contact: String(body.contact ?? "").trim(),
         email: String(body.email ?? "").trim(),
-        memberType: ["student", "teacher", "employee"].includes(String(body.memberType)) ? String(body.memberType) : "student",
+        memberType,
         createdAt: now,
       });
       return Response.json({ ok: true }, { status: 201 });
@@ -454,10 +455,14 @@ export async function POST(request: Request) {
 
     if (action === "updateStudent") {
       const id = Number(body.id);
-      const studentNo = String(body.studentNo ?? "").trim();
+      const [existingMember] = await db.select().from(students).where(and(eq(students.id,id),eq(students.schoolId,schoolId)));
+      if(!existingMember)return Response.json({error:"Üye bulunamadı."},{status:404});
+      const memberType = ["teacher","employee"].includes(String(body.memberType))?String(body.memberType):"student";
+      const studentNo = memberType === "student" ? String(body.studentNo??"").trim() : existingMember.studentNo || `MEM-${crypto.randomUUID()}`;
       const fullName = String(body.fullName ?? "").trim();
-      const grade = String(body.grade ?? "").trim();
-      if (!id || !studentNo || !fullName || !grade)
+      const grade = memberType === "student" ? normalizeGrade(body.grade) : "";
+      if(memberType === "student" && !validGrade(grade))return Response.json({error:"Sınıf ve şube boşluksuz olmalıdır. Örnek: 9A, 10B."},{status:400});
+      if (!id || !studentNo || !fullName || (memberType === "student" && !grade))
         return Response.json(
           { error: "Zorunlu öğrenci alanları eksik." },
           { status: 400 },
@@ -479,7 +484,7 @@ export async function POST(request: Request) {
           grade,
           contact: String(body.contact ?? "").trim(),
           email: String(body.email ?? "").trim(),
-          memberType: ["student", "teacher", "employee"].includes(String(body.memberType)) ? String(body.memberType) : "student",
+          memberType,
           blocked: body.blocked ? 1 : 0,
           blockReason: body.blocked
             ? String(body.blockReason ?? "").trim()
@@ -613,7 +618,7 @@ export async function POST(request: Request) {
       const sessionId = Number(body.sessionId);
       if (!Number.isSafeInteger(sessionId) || sessionId <= 0) return Response.json({ error: "Sayım seçin." }, { status: 400 });
       const result = await env.DB.prepare(inventorySyncSql).bind(now, schoolId, isoDate(), sessionId, isoDate()).run();
-      return Response.json({ ok: true, counted: result.meta.changes });
+      return circulationDelta(schoolId,now);
     }
 
     if (action === "setBookLost") {
@@ -642,10 +647,12 @@ export async function POST(request: Request) {
       const [duplicate] = await db.select({ id: inventoryEntries.id }).from(inventoryEntries).where(and(eq(inventoryEntries.sessionId, sessionId), eq(inventoryEntries.bookId, bookId)));
       if (duplicate) return Response.json({ error: "Bu kitap bu sayımda zaten sayıldı." }, { status: 409 });
       const finalShelf = shelf || book.shelf;
-      await db.insert(inventoryEntries).values({ schoolId, sessionId, bookId, countedAt: now, shelfBefore: book.shelf, shelfAfter: finalShelf });
-      if (finalShelf !== book.shelf || book.lost) await db.update(books).set({ shelf: finalShelf, lost: 0, lostAt: null }).where(and(eq(books.id, bookId), eq(books.schoolId, schoolId)));
-      await db.update(inventorySessions).set({ updatedAt: now }).where(eq(inventorySessions.id, sessionId));
-      return Response.json({ ok: true });
+      await env.DB.batch([
+        env.DB.prepare("INSERT INTO inventory_entries(school_id,session_id,book_id,counted_at,shelf_before,shelf_after,source) VALUES(?,?,?,?,?,?,'manual')").bind(schoolId,sessionId,bookId,now,book.shelf,finalShelf),
+        env.DB.prepare("UPDATE books SET shelf=?,lost=0,lost_at=NULL WHERE school_id=? AND id=?").bind(finalShelf,schoolId,bookId),
+        env.DB.prepare("UPDATE inventory_sessions SET updated_at=? WHERE school_id=? AND id=?").bind(now,schoolId,sessionId),
+      ]);
+      return circulationDelta(schoolId,now,0,bookId);
     }
 
     if (action === "updateInventoryShelf") {
@@ -657,7 +664,7 @@ export async function POST(request: Request) {
       if (!entry) return Response.json({ error: "Bu kitap seçili sayımda bulunamadı." }, { status: 404 });
       await db.update(inventoryEntries).set({ shelfAfter: shelf }).where(eq(inventoryEntries.id, entry.id));
       await db.update(books).set({ shelf }).where(and(eq(books.id, bookId), eq(books.schoolId, schoolId)));
-      return Response.json({ ok: true });
+      return Response.json({ok:true,patch:{books:[{id:bookId,shelf}],inventoryEntries:[{...entry,shelfAfter:shelf}]}});
     }
 
     if (action === "deleteInventorySession") {
@@ -679,11 +686,8 @@ export async function POST(request: Request) {
           { error: "Öğrenci ve yeni sınıf seçmelisiniz." },
           { status: 400 },
         );
-      await db.batch(
-        ids.map((id) =>
-          db.update(students).set({ grade }).where(and(eq(students.id, id), eq(students.schoolId, schoolId))),
-        ),
-      );
+      const changes=ids.map(id=>db.update(students).set({grade}).where(and(eq(students.id,id),eq(students.schoolId,schoolId))));
+      await db.batch([changes[0]!,...changes.slice(1)]);
       return Response.json({ ok: true });
     }
 
@@ -703,7 +707,7 @@ export async function POST(request: Request) {
         })
         .filter(Boolean);
       if (updates.length)
-        await db.batch(updates as Exclude<(typeof updates)[number], null>[]);
+        await db.batch(updates as [NonNullable<(typeof updates)[number]>, ...NonNullable<(typeof updates)[number]>[]]);
       return Response.json({ ok: true });
     }
 
@@ -937,12 +941,12 @@ export async function POST(request: Request) {
         );
       const loanResult = await env.DB.batch([
         env.DB.prepare(`INSERT INTO loans (school_id,student_id,book_id,loaned_at,due_at,school_year)
-          SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM loans WHERE school_id = ? AND book_id = ? AND returned_at IS NULL)`)
-          .bind(schoolId, studentId, bookId, loanedAt, plusDays(loanedAt, config?.loanDays ?? 15), config?.schoolYear ?? "2026-2027", schoolId, bookId),
+          SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM loans WHERE school_id = ? AND book_id = ? AND returned_at IS NULL) AND (SELECT count(*) FROM loans WHERE school_id=? AND student_id=? AND returned_at IS NULL) < ?`)
+          .bind(schoolId, studentId, bookId, loanedAt, plusDays(loanedAt, config?.loanDays ?? 15), config?.schoolYear ?? "2026-2027", schoolId, bookId, schoolId, studentId, maxBooksPerStudent),
         env.DB.prepare(inventorySyncSql).bind(now, schoolId, loanedAt, null, loanedAt),
       ]);
       if (!loanResult[0].meta.changes) return Response.json({ error: "Kitap başka bir işlemde ödünç verildi. Listeyi yenileyin." }, { status: 409 });
-      return Response.json({ ok: true }, { status: 201 });
+      return circulationDelta(schoolId,now,0,bookId);
     }
 
     if (action === "return") {
@@ -952,7 +956,7 @@ export async function POST(request: Request) {
         .where(
           and(eq(loans.id, Number(body.loanId)), eq(loans.schoolId, schoolId), isNull(loans.returnedAt)),
         );
-      return Response.json({ ok: true });
+      return circulationDelta(schoolId,now,Number(body.loanId));
     }
 
     if (action === "markSameDayLoan") {
@@ -1012,6 +1016,8 @@ export async function POST(request: Request) {
           { error: "Öğrenci ve kitap adı zorunludur." },
           { status: 400 },
         );
+      const [requestStudent] = await db.select({id:students.id}).from(students).where(and(eq(students.schoolId,schoolId),eq(students.id,studentId)));
+      if(!requestStudent)return Response.json({error:"Öğrenci bu okula ait değil."},{status:404});
       await db.insert(bookRequests).values({
         schoolId,
         studentId,
@@ -1024,6 +1030,7 @@ export async function POST(request: Request) {
     }
 
     if (action === "updateBookRequest") {
+      if(!["new","reviewed","approved","rejected","purchased"].includes(String(body.status)))return Response.json({error:"Geçersiz talep durumu."},{status:400});
       await db
         .update(bookRequests)
         .set({ status: String(body.status ?? "reviewed") })
@@ -1038,6 +1045,11 @@ export async function POST(request: Request) {
         .toLowerCase();
       const displayName = String(body.displayName ?? "").trim();
       const phone = String(body.phone ?? "").trim();
+      const assignedStudent=Number(body.studentId)||null;
+      if(assignedStudent) {
+        const [member]=await db.select({id:students.id}).from(students).where(and(eq(students.schoolId,schoolId),eq(students.id,assignedStudent)));
+        if(!member)return Response.json({error:"Öğrenci bu okula ait değil."},{status:403});
+      }
       const password = String(body.password ?? "");
       const role = ["admin", "staff", "student"].includes(String(body.role))
         ? String(body.role)

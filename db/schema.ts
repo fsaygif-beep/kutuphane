@@ -57,7 +57,7 @@ export const books = sqliteTable("books", {
   lost: integer("lost").notNull().default(0),
   lostAt: text("lost_at"),
   createdAt: text("created_at").notNull(),
-}, (table) => [uniqueIndex("books_school_inventory_unique").on(table.schoolId, table.inventoryNo)]);
+}, (table) => [uniqueIndex("books_school_inventory_unique").on(table.schoolId, table.inventoryNo),index("books_school_active_title_idx").on(table.schoolId,table.activeInventory,table.title)]);
 
 export const inventorySessions = sqliteTable("inventory_sessions", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -67,7 +67,7 @@ export const inventorySessions = sqliteTable("inventory_sessions", {
   status: text("status").notNull().default("open"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
-}, (table) => [uniqueIndex("inventory_sessions_school_no_date_unique").on(table.schoolId, table.countNo, table.countDate)]);
+}, (table) => [uniqueIndex("inventory_sessions_school_no_date_unique").on(table.schoolId, table.countNo, table.countDate),index("sessions_school_open_date_idx").on(table.schoolId,table.status,table.countDate)]);
 
 export const inventoryEntries = sqliteTable("inventory_entries", {
   source: text("source").notNull().default("manual"),
@@ -94,7 +94,7 @@ export const loans = sqliteTable("loans", {
   schoolYear: text("school_year").notNull(),
   renewalCount: integer("renewal_count").notNull().default(0),
   sameDayRequired: integer("same_day_required").notNull().default(0),
-});
+},(t)=>[index("loans_school_active_book_idx").on(t.schoolId,t.bookId,t.returnedAt),index("loans_school_student_idx").on(t.schoolId,t.studentId,t.returnedAt)]);
 
 export const settings = sqliteTable("settings", {
   id: integer("id").primaryKey(),
@@ -129,6 +129,7 @@ export const settings = sqliteTable("settings", {
 });
 
 export const membershipRequests = sqliteTable("membership_requests", {
+  phone: text("phone").notNull().default(""),
   id: integer("id").primaryKey({ autoIncrement: true }),
   schoolId: integer("school_id").notNull(),
   username: text("username").notNull().default(""),
@@ -213,3 +214,27 @@ export const adminNotes = sqliteTable("admin_notes", {
   done: integer("done").notNull().default(0),
   createdAt: text("created_at").notNull(),
 }, (table) => [index("admin_notes_school_id_idx").on(table.schoolId)]);
+
+
+// School-scoped student community data. Existing circulation records are unchanged.
+export const bookReviews = sqliteTable("book_reviews", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  schoolId: integer("school_id").notNull(), studentId: integer("student_id").notNull(), bookId: integer("book_id").notNull(),
+  content: text("content").notNull(), status: text("status").notNull().default("pending"),
+  createdAt: text("created_at").notNull(), reviewedAt: text("reviewed_at"),
+}, (t) => [index("reviews_school_book_status_idx").on(t.schoolId,t.bookId,t.status)]);
+export const complaints = sqliteTable("complaints", {
+  id: integer("id").primaryKey({ autoIncrement: true }), schoolId: integer("school_id").notNull(),
+  studentId: integer("student_id").notNull(), bookId: integer("book_id"),
+  category: text("category").notNull(), page: text("page").notNull().default(""),
+  content: text("content").notNull(), status: text("status").notNull().default("new"),
+  createdAt: text("created_at").notNull(),
+}, (t) => [index("complaints_school_idx").on(t.schoolId,t.status)]);
+export const readingLists = sqliteTable("reading_lists", {
+  id: integer("id").primaryKey({ autoIncrement: true }), schoolId: integer("school_id").notNull(),
+  studentId: integer("student_id").notNull(), name: text("name").notNull(), createdAt: text("created_at").notNull(),
+}, (t) => [index("reading_lists_owner_idx").on(t.schoolId,t.studentId)]);
+export const readingListItems = sqliteTable("reading_list_items", {
+  id: integer("id").primaryKey({ autoIncrement: true }), schoolId: integer("school_id").notNull(),
+  listId: integer("list_id").notNull(), bookId: integer("book_id").notNull(), createdAt: text("created_at").notNull(),
+}, (t) => [uniqueIndex("reading_items_unique").on(t.listId,t.bookId)]);

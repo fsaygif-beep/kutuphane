@@ -1,8 +1,12 @@
 "use client";
 
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import * as XLSX from "xlsx";
+import type {WorkSheet} from "xlsx";
 import { matchingRecords, memberActiveLoans } from "./circulation-selection";
+import {QrScanner} from "./qr-scanner";
+import { LocationFields } from "./location-fields";
+import {normalizeGrade,validGrade} from "./student-rules";
+import {Photo,BookDiscussion,ReviewModeration,Complaints,StudentReading,ReadingLists} from "./student-community";
 import { reportData } from "./report-data";
 import JsBarcode from "jsbarcode";
 import QRCode from "qrcode";
@@ -13,7 +17,7 @@ const addDateDays = (date: string, days: number) => {
   return value.toISOString().slice(0, 10);
 };
 
-type Student = {
+export type Student = {
   id: number;
   studentNo: string;
   fullName: string;
@@ -25,7 +29,7 @@ type Student = {
   blockReason: string;
   memberType: "student" | "teacher" | "employee";
 };
-type Book = {
+export type Book = {
   id: number;
   inventoryNo: string;
   isbn: string;
@@ -43,7 +47,7 @@ type Book = {
   lost: number;
   lostAt: string | null;
 };
-type Loan = {
+export type Loan = {
   id: number;
   studentId: number;
   studentNo: string;
@@ -87,7 +91,7 @@ type AppUser = {
   active: number;
   passwordConfigured?: boolean;
 };
-type MembershipRequest = { id: number; username: string; email: string; fullName: string; grade: string; studentNo: string; city: string; district: string; schoolName: string; status: string; createdAt: string };
+type MembershipRequest = { phone: string; id: number; username: string; email: string; fullName: string; grade: string; studentNo: string; city: string; district: string; schoolName: string; status: string; createdAt: string };
 type AdminNote = { id: number; content: string; done: number; createdAt: string };
 type ManagedSchool = { id: number; name: string; city: string; district: string; institutionCode: string; active: number; createdAt: string; exempt: boolean; premium: boolean; trial: boolean; remainingDays: number | null; statusLabel: string; premiumUntil: string | null };
 type InventorySession = { id: number; countNo: string; countDate: string; status: string; createdAt: string; updatedAt: string };
@@ -153,6 +157,8 @@ type Tab =
   | "notes"
   | "bulk"
   | "account"
+  | "reading"
+  | "lists"
   | "settings";
 
 const menu: Array<[Tab, string, string]> = [
@@ -164,8 +170,9 @@ const menu: Array<[Tab, string, string]> = [
   ["overdue", "Geç Kalanlar", "!"],
   ["inventory", "Kitap Sayımı", "⌕"],
   ["reports", "Raporlar", "▥"],
-  ["account", "Hesabım", "♙"],
-  ["requests", "Kitap Talepleri", "✎"],
+  ["reading", "Okuduğum Kitaplar", "▤"],
+  ["lists", "Okuma Listelerim", "☷"],
+  ["requests", "Talepler ve Şikâyetler", "✎"],
   ["settings", "Ayarlar", "⚙"],
   ["notes", "Notlar", "✓"],
   ["bulk", "Toplu İşlemler", "⇧"],
@@ -187,6 +194,7 @@ async function request(action: string, payload: Record<string, unknown> = {}) {
     unchanged?: number;
     sent?: number;
     failed?: number; missingEmail?: number;
+    patch?: Partial<Record<"loans"|"books"|"inventoryEntries"|"inventorySessions",Array<{id:number}>>>;
   };
 }
 
@@ -225,11 +233,12 @@ async function uploadImage(
 }
 const mediaUrl = (key: string) => `/api/media?key=${encodeURIComponent(key)}`;
 
-function downloadExcel(
+async function downloadExcel(
   filename: string,
   sheetName: string,
   rows: Record<string, unknown>[],
 ) {
+  const XLSX=await import("xlsx");
   const sheet = XLSX.utils.json_to_sheet(rows);
   const book = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(book, sheet, sheetName);
@@ -271,6 +280,7 @@ function downloadTextPdf(filename: string, title: string, lines: string[]) {
   downloadBlob(filename, new Blob([pdf], { type: "application/pdf" }));
 }
 async function readExcel(file: File) {
+  const XLSX=await import("xlsx");
   const data = await file.arrayBuffer();
   const workbook = XLSX.read(data);
   return workbook.SheetNames.flatMap((name) => XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets[name], { defval: "", raw: false }));
@@ -322,7 +332,7 @@ function LoginScreen({ onLogin }: { onLogin: () => Promise<void> }) {
   const [studentApplicationMode, setStudentApplicationMode] = useState(false);
   const [membershipFee, setMembershipFee] = useState(0);
   const [application, setApplication] = useState({ city: "", district: "", schoolName: "", institutionCode: "", adminName: "", adminEmail: "", password: "" });
-  const [studentApplication, setStudentApplication] = useState({ city: "", district: "", schoolName: "", institutionCode: "", fullName: "", grade: "", studentNo: "", email: "", password: "" });
+  const [studentApplication, setStudentApplication] = useState({ city: "", district: "", schoolName: "", institutionCode: "", fullName: "", grade: "", studentNo: "", email: "", phone: "", password: "" });
   useEffect(() => {
     void fetch("/api/pricing", { cache: "no-store" }).then((response) => response.json()).then((result: { membershipFee?: number }) => setMembershipFee(Math.max(0, Number(result.membershipFee) || 0))).catch(() => setMembershipFee(0));
   }, []);
@@ -374,7 +384,9 @@ function LoginScreen({ onLogin }: { onLogin: () => Promise<void> }) {
       <div className="login-brand"><span className="mark">K</span><div><strong>Okul Kütüphane Otomasyonu</strong><small>E-posta veya kayıtlı cep telefonu ile güvenli erişim</small></div></div>
       <div className="login-copy"><p className="eyebrow">OKUL KÜTÜPHANESİ YÖNETİMİ</p><h1>Okul kütüphanenizi tek panelden yönetin.</h1><p>Kitap ve üye kayıtlarını, ödünç-iade işlemlerini, raf kontrolünü ve kütüphane raporlarını güvenli bir çevrim içi sistemde yönetin.</p></div>
       {studentApplicationMode ? <form className="login-form school-application" onSubmit={applyStudent}>
-        {Object.entries({ city: "Şehir", district: "İlçe", schoolName: "Okul adı", institutionCode: "Kurum kodu", fullName: "Adı soyadı", grade: "Sınıf", studentNo: "Öğrenci numarası", email: "E-posta", password: "En az 6 karakter parola" }).map(([key, label]) => <label key={key}>{label}<input type={key === "password" ? "password" : key === "email" ? "email" : "text"} value={studentApplication[key as keyof typeof studentApplication]} onChange={(event) => setStudentApplication({ ...studentApplication, [key]: event.target.value })} required minLength={key === "password" ? 6 : undefined} /></label>)}
+        <LocationFields city={studentApplication.city} district={studentApplication.district} onChange={(city,district)=>setStudentApplication({...studentApplication,city,district})}/>
+        <p>Sınıf ve şubeyi arada boşluk veya işaret olmadan yazın: 9A, 10B, 12C. Örneğin “9 A”, “9-A” yerine “9A”.</p>
+        {Object.entries({ schoolName: "Okul adı", institutionCode: "Kurum kodu", fullName: "Adı soyadı", grade: "Sınıf ve şube (ör. 10A)", studentNo: "Öğrenci numarası", email: "E-posta", phone: "Cep telefonu (05XXXXXXXXX)", password: "En az 6 karakter parola" }).map(([key, label]) => <label key={key}>{label}<input type={key === "password" ? "password" : key === "email" ? "email" : key === "phone" ? "tel" : "text"} value={studentApplication[key as keyof typeof studentApplication]} onChange={(event) => setStudentApplication({ ...studentApplication, [key]: key === "grade" ? normalizeGrade(event.target.value) : event.target.value })} required minLength={key === "password" ? 6 : undefined} /></label>)}
         {error && <p className="login-error">{error}</p>}
         <button className="login-button" disabled={busy}>Üyelik talebi gönder <span>→</span></button>
         <button type="button" className="secondary" onClick={() => setStudentApplicationMode(false)}>Giriş ekranına dön</button>
@@ -474,7 +486,17 @@ export default function LibraryApp() {
     setNotice("");
     try {
       const result = await request(action, payload);
-      await load();
+      if(result.patch) setData(current=> {
+        if(!current || current.access!=="granted")return current;
+        const next={...current};
+        for(const key of ["loans","books","inventoryEntries","inventorySessions"] as const) {
+          const changes=result.patch?.[key]; if(!changes?.length)continue;
+          const byId=new Map((current[key] as Array<{id:number}>).map(row=>[row.id,row]));
+          for(const row of changes)byId.set(row.id,{...byId.get(row.id),...row});
+          (next as any)[key]=Array.from(byId.values());
+        } return next;
+      });
+      else await load();
       setNotice(action === "importBooks"
         ? `${result.inserted ?? 0} kitap envantere işlendi${result.skipped ? `; ${result.skipped} boş veya yinelenen DN atlandı` : ""}.`
         : action === "sendOverdueEmails"
@@ -508,9 +530,8 @@ export default function LibraryApp() {
     return <MembershipSignup data={data} busy={busy} act={act} />;
   const activeLoans = data.loans.filter((x) => !x.returnedAt);
   const overdue = activeLoans.filter((x) => x.dueAt < data.today);
-  const available = data.books.filter(
-    (book) => Boolean(book.loanable) && !book.lost && !activeLoans.some((loan) => loan.bookId === book.id),
-  );
+  const activeBookIds = new Set(activeLoans.map(l=>l.bookId));
+  const available = data.books.filter(book => Boolean(book.loanable) && !book.lost && !activeBookIds.has(book.id));
   const stats = [
     ["Toplam Kitap", data.books.length, "kitap"],
     ["Kayıtlı Üye", data.students.length, "üye"],
@@ -525,10 +546,10 @@ export default function LibraryApp() {
   };
   const visibleMenu = menu.filter(
     ([id]) =>
-      role === "admin" ||
+      role === "admin" ? !["reading","lists"].includes(id) :
       (role === "staff"
-        ? ["dashboard", "account"].includes(id) || Boolean(tabPermission[id] && permissions.includes(tabPermission[id]!))
-        : ["dashboard", "books", "requests", "account"].includes(id)),
+        ? ["dashboard", "settings"].includes(id) || Boolean(tabPermission[id] && permissions.includes(tabPermission[id]!))
+        : ["dashboard", "books", "requests", "settings", "reading", "lists"].includes(id)),
   );
   return (
     <div className="shell" data-theme={data.settings.theme || "forest"} style={{ "--ui-font": `${data.settings.uiFont === "Inter" ? "Arial" : data.settings.uiFont}, sans-serif`, "--title-font": `${data.settings.titleFont}, serif`, "--base-size": `${data.settings.baseFontSize}px`, "--ink": data.settings.textColor, "--green": data.settings.accentColor, "--paper": data.settings.surfaceColor } as React.CSSProperties}>
@@ -574,6 +595,7 @@ export default function LibraryApp() {
             </div>
           </div>
           <div className="account-box">
+            {role === "student" && data.students[0] && <Photo imageKey={data.students[0].photoKey} name={data.students[0].fullName} kind="member"/>}
             <strong>{data.currentUser?.displayName}</strong>
             <small>
               {role === "admin"
@@ -600,6 +622,7 @@ export default function LibraryApp() {
             <span>×</span>
           </div>
         )}
+        {tab === "dashboard" && role === "student" && data.students[0] && <div className="student-profile"><Photo imageKey={data.students[0].photoKey} name={data.students[0].fullName} kind="member"/><div><strong>{data.students[0].fullName}</strong><p>{data.students[0].grade} · No {data.students[0].studentNo}</p></div></div>}
         {tab === "dashboard" && (
           <Dashboard
             stats={stats}
@@ -610,6 +633,8 @@ export default function LibraryApp() {
             imageKey={data.settings.dashboardImageKey}
           />
         )}
+        {tab === "reading" && role === "student" && <StudentReading student={data.students[0]} loans={data.loans} books={data.books}/>}
+        {tab === "lists" && role === "student" && <ReadingLists books={data.books}/>}
         {(tab === "circulation" || tab === "returns") && (
           <Circulation
             key={tab}
@@ -629,6 +654,7 @@ export default function LibraryApp() {
             loans={data.loans}
             act={act}
             genreOptions={data.settings.bookGenres.split(",").map((value) => value.trim()).filter(Boolean)}
+            studentMode={role === "student"}
             readOnly={role === "student" || (role === "staff" && !permissions.includes("books"))}
           />
         )}
@@ -641,12 +667,14 @@ export default function LibraryApp() {
           />
         )}
         {tab === "requests" && (
-          <Requests
+          <div className="community-sections"><Requests
+            studentMode={role === "student"}
+            canDelete={role === "admin"}
             rows={data.requests}
             students={data.students}
             busy={busy}
             act={act}
-          />
+          /><Complaints books={data.books} studentMode={role === "student"}/>{role === "admin" && <ReviewModeration books={data.books}/>}</div>
         )}
         {tab === "overdue" && (
           <Overdue
@@ -666,7 +694,8 @@ export default function LibraryApp() {
         {tab === "account" && (
           <AccountSecurity currentUser={data.currentUser} busy={busy} act={act} />
         )}
-        {tab === "settings" && (
+        {tab === "settings" && role !== "admin" && <AccountSecurity currentUser={data.currentUser} busy={busy} act={act}/> }
+        {tab === "settings" && role === "admin" && (
           <Settings
             config={data.settings}
             students={data.students}
@@ -772,13 +801,7 @@ function Dashboard({
   );
 }
 
-function CirculationPhoto({ imageKey, name, kind }: { imageKey: string; name: string; kind: "member" | "book" }) {
-  const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [imageKey]);
-  return imageKey && !failed
-    ? <img className={`circulation-photo ${kind}`} src={mediaUrl(imageKey)} alt={`${name} ${kind === "member" ? "fotoğrafı" : "kitap kapağı"}`} onError={() => setFailed(true)} />
-    : <span className={`circulation-photo placeholder ${kind}`} role="img" aria-label={`${name}: görsel yok`}>{kind === "member" ? "◉" : "▤"}</span>;
-}
+function CirculationPhoto({imageKey,name,kind}:{imageKey:string;name:string;kind:"member"|"book"}) {return <Photo imageKey={imageKey} name={name} kind={kind}/>;}
 
 function Circulation({ mode, students, books, active, history, busy, act }: {
   mode: "lend" | "return";
@@ -791,6 +814,11 @@ function Circulation({ mode, students, books, active, history, busy, act }: {
 }) {
   const [studentQuery, setStudentQuery] = useState("");
   const [bookQuery, setBookQuery] = useState("");
+  const suggestions=useMemo(()=>{
+    const text=bookQuery.toLocaleUpperCase("tr").trim();
+    return books.filter(b=>!text||`${b.inventoryNo} ${b.isbn} ${b.title} ${b.author}`.toLocaleUpperCase("tr").includes(text)).slice(0,40);
+  },[books,bookQuery]);
+  const memberSuggestions=useMemo(()=>{const text=studentQuery.toLocaleUpperCase("tr").trim();return students.filter(s=>!text||`${s.studentNo} ${s.fullName} ${s.grade}`.toLocaleUpperCase("tr").includes(text)).slice(0,40);},[students,studentQuery]);
   const submitting = useRef(false);
   const memberValue = (member: Student) => `${member.studentNo} · ${member.fullName} · ${member.grade}`;
   const memberMatches = matchingRecords(students, studentQuery, (member) => [member.studentNo, member.fullName, memberValue(member)]);
@@ -836,16 +864,17 @@ function Circulation({ mode, students, books, active, history, busy, act }: {
         <div className="loan-entry-grid">
           <div className="step"><b>1</b><label>QR / Üye No / Ad Soyad
             <input list="circulation-members" value={studentQuery} onChange={(event) => { setStudentQuery(event.target.value); if (mode === "return") setBookQuery(""); }} placeholder="Üye numarasını okutun veya kişiyi seçin…" autoComplete="off" />
-            <datalist id="circulation-members">{students.map((member) => <option key={member.id} value={memberValue(member)} />)}</datalist>
+            <datalist id="circulation-members">{memberSuggestions.map((member) => <option key={member.id} value={memberValue(member)} />)}</datalist>
             {memberMatches.length > 1 && <small role="status">Aynı adla birden fazla üye var. Üye numarasıyla seçin.</small>}
           </label></div>
           <div className="step"><b>2</b><label>{mode === "lend" ? "QR / DN / ISBN / Kitap Adı" : "QR / DN / İade edilecek kitap"}
             <input list="circulation-books" value={bookQuery} onChange={(event) => mode === "lend" ? setBookQuery(event.target.value) : searchReturnBook(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); if (mode === "lend") void lend(); } }} placeholder="Demirbaş numarasını okutun veya kitabı seçin…" autoComplete="off" />
-            <datalist id="circulation-books">{mode === "lend" ? books.map((book) => <option key={book.id} value={`${book.inventoryNo} · ${book.title} · ${book.author}`} />) : active.map((loan) => <option key={loan.id} value={loanValue(loan)} />)}</datalist>
+            <datalist id="circulation-books">{mode === "lend" ? suggestions.map((book) => <option key={book.id} value={`${book.inventoryNo} · ${book.title} · ${book.author}`} />) : active.map((loan) => <option key={loan.id} value={loanValue(loan)} />)}</datalist>
             {(mode === "lend" ? bookMatches : returnMatches).length > 1 && <small role="status">Birden fazla nüsha eşleşti. Demirbaş numarasıyla kitabı seçin.</small>}
             {bookQuery && !(mode === "lend" ? bookMatches : returnMatches).length && <small role="status">{mode === "lend" ? "Ödünç verilebilir bir kitap seçin." : "Eşleşen aktif ödünç bulunamadı."}</small>}
           </label></div>
         </div>
+        <div className="circulation-camera"><QrScanner disabled={busy} onScan={value=>mode==="lend"?setBookQuery(value):searchReturnBook(value)}/></div>
         <div className="circulation-previews">
           {selectedStudent && <div className="circulation-preview"><CirculationPhoto imageKey={selectedStudent.photoKey} name={selectedStudent.fullName} kind="member" /><div><strong>{selectedStudent.fullName}</strong><small>No {selectedStudent.studentNo} · {selectedStudent.grade}</small><span className="badge blue">{personLoans.length} kitap üzerinde</span>{mode === "lend" && Boolean(selectedStudent.blocked) && <p className="login-error">Bu üyeye kitap verilemez: {selectedStudent.blockReason || "Yönetici engeli"}</p>}</div></div>}
           {mode === "lend" && selectedBook && <div className="circulation-preview"><CirculationPhoto imageKey={selectedBook.coverKey} name={selectedBook.title} kind="book" /><div><strong>{selectedBook.title}</strong><small>{selectedBook.author}</small><small>DN {selectedBook.inventoryNo}</small></div></div>}
@@ -868,6 +897,7 @@ function Books({
   loans,
   act,
   readOnly = false,
+  studentMode = false,
   genreOptions,
 }: {
   books: Book[];
@@ -875,8 +905,10 @@ function Books({
   loans: Loan[];
   act: (a: string, p: Record<string, unknown>, s: string) => Promise<boolean>;
   readOnly?: boolean;
+  studentMode?: boolean;
   genreOptions: string[];
 }) {
+  const [visibleLimit,setVisibleLimit]=useState(60);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Book | null>(null);
   const [q, setQ] = useState("");
@@ -1028,7 +1060,7 @@ function Books({
         <strong className="book-result-count">{shown.length} / {books.length} kitap listeleniyor</strong>
       </div>
       <div className="book-grid">
-        {shown.map((book) => (
+        {shown.slice(0, visibleLimit).map((book) => (
           <article className={`book clickable-book ${selectedBookId === book.id ? "selected" : ""}`} key={book.id} role="button" tabIndex={0} onClick={() => setSelectedBookId((current) => current === book.id ? null : book.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedBookId((current) => current === book.id ? null : book.id); } }}>
             <ImageThumb
               src={book.coverKey ? mediaUrl(book.coverKey) : ""}
@@ -1045,7 +1077,7 @@ function Books({
               >
                 {book.lost ? "Kayıp" : active.some((x) => x.bookId === book.id) ? "Ödünçte" : "Rafta"}
               </span>
-              <h3>{book.title}</h3>
+              <h3>{book.title}</h3><button className="small" onClick={e=>{e.stopPropagation();setSelectedBookId(book.id);}}>Yorumlar</button>
               <p>{book.author}</p>
               {book.category && <small className="book-category">{book.category}</small>}
               <small>
@@ -1083,8 +1115,10 @@ function Books({
           </article>
         ))}
       </div>
+      {shown.length>visibleLimit&&<button className="secondary" onClick={()=>setVisibleLimit(x=>x+60)}>Daha fazla kitap göster ({shown.length-visibleLimit})</button>}
       {selectedBook && <div className="history-panel">
         <div className="history-head"><div><strong>{selectedBook.title}</strong><small>{selectedBook.author} · Aynı ad ve yazara ait tüm nüshalar</small></div><button className="small" onClick={() => setSelectedBookId(null)}>Kapat</button></div>
+        <BookDiscussion key={selectedBook.id} bookId={selectedBook.id} canReview={studentMode && selectedBookLoans.some(l=>Boolean(l.returnedAt))}/>
         <div className="table-card"><table><thead><tr><th>Üye</th><th>DN</th><th>Alış tarihi</th><th>İade / Durum</th></tr></thead><tbody>{selectedBookLoans.map((loan) => <tr key={loan.id}><td><strong>{loan.studentName}</strong><small>{loan.studentNo} · {loan.grade}</small></td><td>{loan.inventoryNo}</td><td>{fmt(loan.loanedAt)}</td><td>{loan.returnedAt ? fmt(loan.returnedAt) : <span className="badge blue">Ödünçte</span>}</td></tr>)}</tbody></table>{!selectedBookLoans.length && <Empty text="Bu kitap veya aynı ad-yazardaki diğer nüshalar için ödünç kaydı bulunmuyor." />}</div>
       </div>}
       {!shown.length && <Empty text="Aramanızla eşleşen kitap bulunamadı." />}
@@ -1262,6 +1296,7 @@ function Students({
       )}
       {open && (
         <StudentForm
+          memberType={memberTab}
           busy={busy}
           initial={editing}
           submit={async (p) => {
@@ -1413,7 +1448,7 @@ function Students({
                 </td>
               </tr>,
               selectedMemberId === x.id ? <tr className="member-history-row" key={`history-${x.id}`}><td colSpan={classes ? 8 : 7}>
-                <div className="inline-history"><strong>{x.fullName} — aldığı bütün kitaplar</strong><div className="history-items">{loans.filter((loan) => loan.studentId === x.id).map((loan) => <span key={loan.id}><span><b>{loan.bookTitle}</b><small>{loan.author} · DN {loan.inventoryNo}</small></span><span><small>{fmt(loan.loanedAt)} → {loan.returnedAt ? fmt(loan.returnedAt) : "Hâlen ödünçte"}</small></span></span>)}</div>{!loans.some((loan) => loan.studentId === x.id) && <p className="empty">Bu üyenin ödünç kaydı bulunmuyor.</p>}</div>
+                <div className="inline-history"><strong>{x.fullName} — aldığı bütün kitaplar</strong><div className="history-items">{loans.filter((loan) => loan.studentId === x.id).map((loan) => <span key={loan.id}><span><Photo imageKey={loan.bookCoverKey} name={loan.bookTitle}/><b>{loan.bookTitle}</b><small>{loan.author} · DN {loan.inventoryNo}</small></span><span><small>{fmt(loan.loanedAt)} → {loan.returnedAt ? fmt(loan.returnedAt) : "Hâlen ödünçte"}</small></span></span>)}</div>{!loans.some((loan) => loan.studentId === x.id) && <p className="empty">Bu üyenin ödünç kaydı bulunmuyor.</p>}</div>
               </td></tr> : null
             ])}
           </tbody>
@@ -1543,13 +1578,13 @@ function Overdue({
                   />
                 </td>
                 <td>
-                  <strong>{x.studentName}</strong>
+                  <Photo hidden imageKey={x.studentPhotoKey} name={x.studentName} kind="member"/>
                   <small>
                     {x.studentNo} · {x.grade} · {x.email || "E-posta yok"}
                   </small>
                 </td>
                 <td>
-                  {x.bookTitle}
+                  <Photo hidden imageKey={x.bookCoverKey} name={x.bookTitle}/>
                   <small>
                     {x.author} · {fmt(x.loanedAt)} tarihinde alındı
                   </small>
@@ -1596,13 +1631,17 @@ function Requests({
   busy,
   act,
   studentMode = false,
+  canDelete = false,
 }: {
   rows: BookRequest[];
   students: Student[];
   busy: boolean;
   act: (a: string, p: Record<string, unknown>, s: string) => Promise<boolean>;
   studentMode?: boolean;
+  canDelete?: boolean;
 }) {
+  const [archive,setArchive]=useState(false);
+  const shownRows=rows.filter(r=>archive?r.status!=="new":r.status==="new");
   const [studentId, setStudentId] = useState(
     studentMode && students[0] ? String(students[0].id) : "",
   );
@@ -1610,11 +1649,12 @@ function Requests({
   const [author, setAuthor] = useState("");
   const [note, setNote] = useState("");
   const submit = async () => {
-    await act(
+    const saved = await act(
       "addBookRequest",
       { studentId: Number(studentId), title, author, note },
       "Kitap talebi yöneticinin listesine eklendi.",
     );
+    if(!saved)return;
     setTitle("");
     setAuthor("");
     setNote("");
@@ -1625,6 +1665,7 @@ function Requests({
         title="Kitap Talepleri"
         text="Öğrencilerin kütüphanede görmek istedikleri kitapları kaydedin ve değerlendirin."
       />
+      <div className="member-tabs"><button className={!archive?"active":""} onClick={()=>setArchive(false)}>Aktif talepler ({rows.filter(r=>r.status==="new").length})</button><button className={archive?"active":""} onClick={()=>setArchive(true)}>Pasif / Değerlendirilen talepler ({rows.filter(r=>r.status!=="new").length})</button></div>
       <div className="grid-2 requests-layout">
         <Card title="Yeni Kitap Talebi">
           <div className="form-grid one">
@@ -1681,10 +1722,10 @@ function Requests({
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => (
+              {shownRows.map((row) => (
                 <tr key={row.id}>
                   <td>
-                    <strong>{row.studentName}</strong>
+                    <Photo imageKey={students.find(s=>s.id===row.studentId)?.photoKey||""} name={row.studentName} kind="member"/><strong>{row.studentName}</strong>
                     <small>{row.studentNo}</small>
                   </td>
                   <td>
@@ -1694,7 +1735,7 @@ function Requests({
                   <td>{row.note || "—"}</td>
                   <td>
                     {studentMode ? (
-                      <span className="badge blue">{row.status}</span>
+                      <span className="badge blue">{{new:"Yeni",reviewed:"İnceleniyor",approved:"Onaylandı",rejected:"Uygun değil",purchased:"Temin edildi"}[row.status] || row.status}</span>
                     ) : (
                       <select
                         value={row.status}
@@ -1714,12 +1755,12 @@ function Requests({
                         <option value="purchased">Temin edildi</option>
                       </select>
                     )}
-                  </td>
+                  {canDelete&&<button className="small danger" disabled={busy} onClick={()=>{if(confirm("Bu kitap talebi silinsin mi?"))void act("deleteBookRequest",{id:row.id},"Talep silindi.");}}>Talebi sil</button>}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-          {!rows.length && <Empty text="Henüz kitap talebi yok." />}
+          {!shownRows.length && <Empty text="Henüz kitap talebi yok." />}
         </div>
       </div>
     </section>
@@ -1833,7 +1874,7 @@ function BulkImages({ students, books, busy, act }: { students: Student[]; books
           {visible.filter((row) => mode !== "student" || ((row as Student).grade || "Sınıfsız") === group).map((row) => {
             const isBook = mode === "book"; const recordKey = isBook ? (row as Book).inventoryNo : (row as Student).studentNo; const assignmentKey = `${isBook ? "book" : "student"}:${recordKey}`; const selected = assignments[assignmentKey]; const imageKey = isBook ? (row as Book).coverKey : (row as Student).photoKey;
             return <label key={`${mode}-${row.id}`} className={`bulk-drop ${selected ? "selected" : ""}`} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const file = event.dataTransfer.files[0]; if (file) assign(file, row); }}>
-              {imageKey ? <img src={mediaUrl(imageKey)} alt="" /> : <span className="bulk-placeholder">＋</span>}
+              <Photo imageKey={imageKey} name={isBook?(row as Book).title:(row as Student).fullName} kind={isBook?"book":"member"}/>
               <span><strong>{isBook ? (row as Book).title : (row as Student).fullName}</strong><small>{recordKey}{!isBook && ` · ${(row as Student).grade}`}</small><em>{selected ? selected.file.name : "Fotoğrafı buraya sürükleyin"}</em></span>
               <input hidden type="file" accept="image/*" onChange={(event) => event.target.files?.[0] && assign(event.target.files[0], row)} />
             </label>;
@@ -1888,17 +1929,19 @@ function Reports({ data }: { data: Data }) {
       </div>
       {(selectedReader || selectedTitle) && <div ref={detailRef} className="report-detail" role="region" aria-live="polite" aria-label="Seçilen okuma ayrıntıları"><Card title={selectedReader ? `${selectedReader.name} — okuduğu kitaplar` : `${selectedTitle?.title} — okuyan üyeler`} action="Kapat" onAction={() => setDetail(null)}>
         <p className="report-detail-note">{fmt(startDate)} – {fmt(endDate)} tarihleri arasındaki sıralamaya dahil edilen {detailRows.length} tamamlanmış ödünç işlemi.</p>
-        <div className="table-wrap"><table><thead><tr><th>Üye</th><th>Kitap</th><th>Alış</th><th>İade</th></tr></thead><tbody>{detailRows.map((loan) => <tr key={loan.id}><td><strong>{loan.studentName}</strong><small>{loan.studentNo} · {loan.grade}</small></td><td><strong>{loan.bookTitle}</strong><small>{loan.author} · DN {loan.inventoryNo}</small></td><td>{fmt(loan.loanedAt)}</td><td>{fmt(loan.returnedAt!)}</td></tr>)}</tbody></table></div>
+        <div className="table-wrap"><table><thead><tr><th>Üye</th><th>Kitap</th><th>Alış</th><th>İade</th></tr></thead><tbody>{detailRows.map((loan) => <tr key={loan.id}><td><Photo imageKey={loan.studentPhotoKey} name={loan.studentName} kind="member"/><strong>{loan.studentName}</strong><small>{loan.studentNo} · {loan.grade}</small></td><td><Photo imageKey={loan.bookCoverKey} name={loan.bookTitle}/><strong>{loan.bookTitle}</strong><small>{loan.author} · DN {loan.inventoryNo}</small></td><td>{fmt(loan.loanedAt)}</td><td>{fmt(loan.returnedAt!)}</td></tr>)}</tbody></table></div>
       </Card></div>}
     </section>
   );
 }
 
 function InventoryPersistent({ books, active, sessions, entries, today, busy, act }: { books: Book[]; active: Loan[]; sessions: InventorySession[]; entries: InventoryEntry[]; today: string; busy: boolean; act: (a: string, p: Record<string, unknown>, s: string) => Promise<boolean> }) {
+  const [listLimit,setListLimit]=useState(100);
   const [showNew, setShowNew] = useState(!sessions.length), [countNo, setCountNo] = useState(""), [countDate, setCountDate] = useState(today);
   const [sessionKey, setSessionKey] = useState(sessions[0] ? String(sessions[0].id) : ""), [query, setQuery] = useState(""), deferredQuery = useDeferredValue(query);
   const [shelf, setShelf] = useState(""), [categoryFilter, setCategoryFilter] = useState(""), [shelfFilter, setShelfFilter] = useState("");
   const [selectedBookId, setSelectedBookId] = useState(0), [optimisticIds, setOptimisticIds] = useState<Set<number>>(new Set()), [compareA, setCompareA] = useState(""), [compareB, setCompareB] = useState("");
+  useEffect(()=>setOptimisticIds(new Set()),[sessionKey]);
   const session = sessions.find((x) => String(x.id) === sessionKey) || sessions[0];
   const syncedSession = useRef<number | null>(null);
   useEffect(() => {
@@ -1932,10 +1975,11 @@ function InventoryPersistent({ books, active, sessions, entries, today, busy, ac
     <PageHead title="Kitap Sayımı ve Raf Kontrol" text="Tarihli sayımları kaydedin, yarım kalan sayıma devam edin ve iki sayımı karşılaştırın." action={<button className="primary" onClick={() => setShowNew(true)}>Yeni sayım</button>} />
     {showNew && <Card title="Yeni sayım"><div className="form-grid three"><label>Sayım numarası<input value={countNo} onChange={e=>setCountNo(e.target.value)} placeholder="Örn. 2026-01" /></label><label>Sayım tarihi<input type="date" value={countDate} onChange={e=>setCountDate(e.target.value)} /></label><button className="primary" disabled={busy} onClick={()=>void create()}>Sayımı başlat / devam et</button></div></Card>}
     <div className="grid-2">
-      <Card title="Aktif sayım"><div className="form-grid one"><label>Kayıtlı sayım<select value={session?.id || ""} onChange={e=>{setSessionKey(e.target.value);setOptimisticIds(new Set());}}><option value="">Seçin…</option>{sessions.map(x=><option key={x.id} value={x.id}>#{x.countNo} · {fmt(x.countDate)} · {entries.filter(e=>e.sessionId===x.id).length} kitap</option>)}</select></label><button className="danger" disabled={busy||!session} onClick={()=>void deleteSession()}>Kayıtlı sayımı sil</button><div className="form-grid two"><label>Kategori<select value={categoryFilter} onChange={e=>setCategoryFilter(e.target.value)}><option value="">Tüm kategoriler</option>{categories.map(x=><option key={x}>{x}</option>)}</select></label><label>Raf<select value={shelfFilter} onChange={e=>setShelfFilter(e.target.value)}><option value="">Tüm raflar</option>{shelves.map(x=><option key={x}>{x}</option>)}</select></label></div><label>DN / ISBN / Kitap / Yazar<input autoFocus value={query} onChange={e=>{setQuery(e.target.value);setSelectedBookId(0);}} onKeyDown={e=>{if(e.key==="Enter")void countBook(exact);}} placeholder="Okutun veya kitap-yazar adı yazın" /></label>{query.trim()&&searchMatches.length>1&&<label>Eşleşen kitap<select value={selectedBookId} onChange={e=>setSelectedBookId(Number(e.target.value))}><option value="">Doğru kitabı seçin…</option>{searchMatches.map(book=><option key={book.id} value={book.id}>{book.inventoryNo} · {book.title} · {book.author}</option>)}</select></label>}<label>Yeni raf (isteğe bağlı)<input value={shelf} onChange={e=>setShelf(e.target.value)} placeholder={exact?.shelf||"Mevcut raf korunur"}/></label>{exact&&<p className="muted"><b>{exact.title}</b> · {exact.author} · Raf {exact.shelf||"—"}</p>}<button className="primary" disabled={busy||!session||!query.trim()} onClick={()=>void countBook(exact)}>Kitabı say</button></div></Card>
+      <Card title="Aktif sayım"><div className="form-grid one"><label>Kayıtlı sayım<select value={session?.id || ""} onChange={e=>{setSessionKey(e.target.value);setOptimisticIds(new Set());}}><option value="">Seçin…</option>{sessions.map(x=><option key={x.id} value={x.id}>#{x.countNo} · {fmt(x.countDate)} · {entries.filter(e=>e.sessionId===x.id).length} kitap</option>)}</select></label><button className="danger" disabled={busy||!session} onClick={()=>void deleteSession()}>Kayıtlı sayımı sil</button><div className="form-grid two"><label>Kategori<select value={categoryFilter} onChange={e=>setCategoryFilter(e.target.value)}><option value="">Tüm kategoriler</option>{categories.map(x=><option key={x}>{x}</option>)}</select></label><label>Raf<select value={shelfFilter} onChange={e=>setShelfFilter(e.target.value)}><option value="">Tüm raflar</option>{shelves.map(x=><option key={x}>{x}</option>)}</select></label></div><label>DN / ISBN / Kitap / Yazar<input autoFocus value={query} onChange={e=>{setQuery(e.target.value);setSelectedBookId(0);}} onKeyDown={e=>{if(e.key==="Enter")void countBook(exact);}} placeholder="Okutun veya kitap-yazar adı yazın" /></label>{query.trim()&&searchMatches.length>1&&<label>Eşleşen kitap<select value={selectedBookId} onChange={e=>setSelectedBookId(Number(e.target.value))}><option value="">Doğru kitabı seçin…</option>{searchMatches.map(book=><option key={book.id} value={book.id}>{book.inventoryNo} · {book.title} · {book.author}</option>)}</select></label>}<QrScanner disabled={busy||!session} onScan={value=>{setQuery(value);setSelectedBookId(0);}}/><label>Yeni raf (isteğe bağlı)<input value={shelf} onChange={e=>setShelf(e.target.value)} placeholder={exact?.shelf||"Mevcut raf korunur"}/></label>{exact&&<p className="muted"><b>{exact.title}</b> · {exact.author} · Raf {exact.shelf||"—"}</p>}<button className="primary" disabled={busy||!session||!query.trim()} onClick={()=>void countBook(exact)}>Kitabı say</button></div></Card>
       <Card title={`Sayım özeti (${sessionEntries.length}/${books.length})`}><div className="inventory-summary"><span><b>{sessionEntries.length}</b>Sayılan</span><span><b>{Math.max(0, books.length-sessionEntries.length)}</b>Sayılmayan</span><span><b>{sessionEntries.filter(e=>e.shelfBefore!==e.shelfAfter).length}</b>Rafı değişen</span></div><p className="muted">Son işlem: {session ? new Date(session.updatedAt).toLocaleString("tr-TR") : "—"}</p></Card>
     </div>
-    <div className="inventory-transfer-grid"><Card title={`Kayıtlı kitaplar - sayılmayı bekleyen (${remainingBooks.length})`}><div className="inventory-book-list">{remainingBooks.map(book=><article key={book.id}><div><strong>{book.title}</strong><small>{book.author} · DN {book.inventoryNo} · Raf {book.shelf||"—"}</small><small>{book.category||"Kategori yok"}</small></div><button className="secondary compact" disabled={busy||!session} onClick={()=>void countBook(book)}>Say</button></article>)}{!remainingBooks.length&&<Empty text="Bu filtrede sayılmayı bekleyen kitap kalmadı."/>}</div></Card><Card title={`Sayımı yapılan kitaplar (${countedBooks.length})`}><div className="inventory-book-list counted">{countedBooks.map(book=>{const entry=entryByBook.get(book.id);return <article key={book.id}><div><strong>{book.title}</strong><small>{book.author} · DN {book.inventoryNo}</small><small>{entry?new Date(entry.countedAt).toLocaleString("tr-TR"):"Kaydediliyor…"}</small>{entry?.source === "loan" && <span className="badge blue">Ödünç işlemi nedeniyle otomatik sayıldı</span>}</div><div className="inventory-counted-actions"><input aria-label={`${book.title} yeni raf`} defaultValue={entry?.shelfAfter||book.shelf} onBlur={e=>{const value=e.target.value.trim();if(entry&&value&&value!==(entry.shelfAfter||book.shelf))void act("updateInventoryShelf",{sessionId:session?.id,bookId:book.id,shelf:value},"Raf bilgisi güncellendi.");}}/><span className={`badge ${activeIds.has(book.id)?"blue":"green"}`}>{activeIds.has(book.id)?"Ödünçte":"Rafta"}</span></div></article>})}{!countedBooks.length&&<Empty text="Sayılan kitaplar bu sütuna taşınacak."/>}</div></Card></div>
+    <div className="inventory-transfer-grid"><Card title={`Kayıtlı kitaplar - sayılmayı bekleyen (${remainingBooks.length})`}><div className="inventory-book-list">{remainingBooks.slice(0,listLimit).map(book=><article key={book.id}><Photo imageKey={book.coverKey} name={book.title}/><div><strong>{book.title}</strong><small>{book.author} · DN {book.inventoryNo} · Raf {book.shelf||"—"}</small><small>{book.category||"Kategori yok"}</small></div><button className="secondary compact" disabled={busy||!session} onClick={()=>void countBook(book)}>Say</button></article>)}{!remainingBooks.length&&<Empty text="Bu filtrede sayılmayı bekleyen kitap kalmadı."/>}</div></Card><Card title={`Sayımı yapılan kitaplar (${countedBooks.length})`}><div className="inventory-book-list counted">{countedBooks.slice(0,listLimit).map(book=>{const entry=entryByBook.get(book.id);return <article key={book.id}><Photo imageKey={book.coverKey} name={book.title}/><div><strong>{book.title}</strong><small>{book.author} · DN {book.inventoryNo}</small><small>{entry?new Date(entry.countedAt).toLocaleString("tr-TR"):"Kaydediliyor…"}</small>{entry?.source === "loan" && <span className="badge blue">Ödünç işlemi nedeniyle otomatik sayıldı</span>}</div><div className="inventory-counted-actions"><input aria-label={`${book.title} yeni raf`} defaultValue={entry?.shelfAfter||book.shelf} onBlur={e=>{const value=e.target.value.trim();if(entry&&value&&value!==(entry.shelfAfter||book.shelf))void act("updateInventoryShelf",{sessionId:session?.id,bookId:book.id,shelf:value},"Raf bilgisi güncellendi.");}}/><span className={`badge ${activeIds.has(book.id)?"blue":"green"}`}>{activeIds.has(book.id)?"Ödünçte":"Rafta"}</span></div></article>})}{!countedBooks.length&&<Empty text="Sayılan kitaplar bu sütuna taşınacak."/>}</div></Card></div>
+    {Math.max(remainingBooks.length,countedBooks.length)>listLimit&&<button className="secondary" onClick={()=>setListLimit(x=>x+100)}>Sonraki 100 kaydı göster</button>}
     <Card title="Sayım günlerini karşılaştır"><div className="form-grid three"><label>İlk sayım<select value={compareA} onChange={e=>setCompareA(e.target.value)}><option value="">Seçin…</option>{sessions.map(x=><option key={x.id} value={x.id}>#{x.countNo} · {fmt(x.countDate)}</option>)}</select></label><label>İkinci sayım<select value={compareB} onChange={e=>setCompareB(e.target.value)}><option value="">Seçin…</option>{sessions.map(x=><option key={x.id} value={x.id}>#{x.countNo} · {fmt(x.countDate)}</option>)}</select></label><button className="secondary" disabled={!comparison} onClick={download}>Karşılaştırma raporunu indir</button></div>{comparison&&<div className="inventory-summary"><span><b>{comparison.onlyA.length}</b>Yalnız ilk sayımda</span><span><b>{comparison.onlyB.length}</b>Yalnız ikinci sayımda</span><span><b>{comparison.common.length}</b>Her ikisinde</span></div>}</Card>
   </section>;
 }
@@ -2274,9 +2318,10 @@ function SpineLabelGenerator({ books }: { books: Book[] }) {
     if (!selected.length) return;
     const response = await fetch("/KUTUPHANE-SIRT-ETIKETI.xlsx");
     if (!response.ok) return alert("Sırt etiketi şablonu açılamadı.");
+    const XLSX=await import("xlsx");
     const workbook = XLSX.read(await response.arrayBuffer(), { type: "array", cellStyles: true });
     const originalName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[originalName] as XLSX.WorkSheet & { "!rows"?: Array<{ hpt?: number }>; "!cols"?: Array<{ wch?: number }> };
+    const sheet = workbook.Sheets[originalName] as WorkSheet & { "!rows"?: Array<{ hpt?: number }>; "!cols"?: Array<{ wch?: number }> };
     workbook.SheetNames.slice(1).forEach((name) => { delete workbook.Sheets[name]; });
     workbook.SheetNames = [originalName];
     workbook.SheetNames[0] = "Sırt Etiketleri";
@@ -2305,7 +2350,7 @@ function SpineLabelGenerator({ books }: { books: Book[] }) {
   };
   return <div className="spine-builder">
     <label>Etiket satır sayısı (1–10)<input type="number" min="1" max="10" value={labelRows} onChange={(event) => { const next = Math.min(10, Math.max(1, Math.trunc(Number(event.target.value)) || 1)); if (selected.length > next * 14) return alert("Eklenen etiketleri korumak için önce fazla etiketleri listeden kaldırın."); setLabelRows(next); }} /></label><p className="muted">{labelRows} satır × 14 sütun = {capacity} etiket. 10 satırda etiket boyuna göre birden fazla baskı sayfası gerekebilir.</p><div className="form-grid three"><label>ID / DN veya ISBN<input list="spine-book-options" value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }} placeholder="Numarayı girin veya kitabı seçin" /><datalist id="spine-book-options">{books.map((book) => <option key={book.id} value={`${book.inventoryNo} · ${book.title}`} />)}</datalist></label><button className="primary" onClick={add}>Ekle</button><button className="secondary" disabled={!selected.length} onClick={() => void download()}>Excel dosyasını indir</button></div>
-    <label>Etiket içindeki bilgi satırı (3–10)<input type="number" min="3" max="10" value={textRows} onChange={(event) => { const count = Math.min(10, Math.max(3, Math.trunc(Number(event.target.value)) || 3)); setTextRows(count); setRowHeights((current) => Array.from({ length: count }, (_, index) => current[index] ?? 15.75)); }} /></label><p className="muted">İlk üç satır: yazar baş harfi, Dewey ve yazar kodu. Ek satırlar: kitap adı, DN, kategori, yazar, yayınevi, ISBN ve raf.</p><div className="spine-size-controls"><fieldset><legend>Satır yükseklikleri</legend>{rowHeights.map((height, index) => <label key={index}>{index + 1}. satır<input type="number" min="8" max="80" step="0.25" value={height} onChange={(e) => setRowHeights((current) => current.map((value, position) => position === index ? Number(e.target.value) : value))} /></label>)}</fieldset><fieldset><legend>Sütun genişlikleri</legend>{columnWidths.map((width, index) => <label key={index}>{XLSX.utils.encode_col(index)}<input type="number" min="3" max="30" step="0.1" value={width} onChange={(e) => setColumnWidths((current) => current.map((value, position) => position === index ? Number(e.target.value) : value))} /></label>)}</fieldset></div>
+    <label>Etiket içindeki bilgi satırı (3–10)<input type="number" min="3" max="10" value={textRows} onChange={(event) => { const count = Math.min(10, Math.max(3, Math.trunc(Number(event.target.value)) || 3)); setTextRows(count); setRowHeights((current) => Array.from({ length: count }, (_, index) => current[index] ?? 15.75)); }} /></label><p className="muted">İlk üç satır: yazar baş harfi, Dewey ve yazar kodu. Ek satırlar: kitap adı, DN, kategori, yazar, yayınevi, ISBN ve raf.</p><div className="spine-size-controls"><fieldset><legend>Satır yükseklikleri</legend>{rowHeights.map((height, index) => <label key={index}>{index + 1}. satır<input type="number" min="8" max="80" step="0.25" value={height} onChange={(e) => setRowHeights((current) => current.map((value, position) => position === index ? Number(e.target.value) : value))} /></label>)}</fieldset><fieldset><legend>Sütun genişlikleri</legend>{columnWidths.map((width, index) => <label key={index}>{String.fromCharCode(65+index)}<input type="number" min="3" max="30" step="0.1" value={width} onChange={(e) => setColumnWidths((current) => current.map((value, position) => position === index ? Number(e.target.value) : value))} /></label>)}</fieldset></div>
     <div className="spine-preview" style={{ gridTemplateColumns: `repeat(14, minmax(${Math.max(46, columnWidths[0] * 7)}px, 1fr))` }}>{selected.map((book) => { const parts = labelParts(book); return <article key={book.id} title={`${book.inventoryNo} · ${book.title}`}>{parts.map((value, index) => <span key={index} style={{ minHeight: rowHeights[index], display: "block", overflowWrap: "anywhere" }}>{value}</span>)}<button aria-label={`${book.title} etiketini kaldır`} onClick={() => setSelected((current) => current.filter((item) => item.id !== book.id))}>×</button></article>; })}{!selected.length && <p className="empty">Eklenen etiketler burada ön izlenir.</p>}</div>
   </div>;
 }
@@ -2335,7 +2380,7 @@ function Settings({
 }) {
   const [form, setForm] = useState({ ...config, uiFont: config.uiFont === "Inter" ? "Arial" : config.uiFont });
   const [settingsModule, setSettingsModule] = useState<
-    "institution" | "users" | "circulation" | "communication" | "appearance" | "data" | "schools" | "catalog" | "labels" | "spine"
+    "account" | "institution" | "users" | "circulation" | "communication" | "appearance" | "data" | "schools" | "catalog" | "labels" | "spine"
   >("institution");
   const [managedSchools, setManagedSchools] = useState<ManagedSchool[]>([]);
   const [schoolsLoading, setSchoolsLoading] = useState(false);
@@ -2443,6 +2488,7 @@ function Settings({
       />
       <div className="settings-tabs" role="tablist" aria-label="Ayar modülleri">
         {[
+          ["account", "Hesabım", "♙"],
           ["institution", "Kurum ve Logo", "⌂"],
           ["users", "Kullanıcılar", "◉"],
           ["circulation", "Ödünç Kuralları", "⇄"],
@@ -2468,6 +2514,7 @@ function Settings({
           </button>
         ))}
       </div>
+      {settingsModule==="account"&&<AccountSecurity currentUser={currentUser} busy={busy} act={act}/>}
       <div className="grid-2 settings-content">
         <Card title="Yeni barkod ve QR numara oluştur" visible={settingsModule === "labels"}><BarcodeQrGenerator books={books} /></Card>
         <Card title="Sırt Etiketi" visible={settingsModule === "spine"}><SpineLabelGenerator books={books} /></Card>
@@ -2841,7 +2888,7 @@ function Settings({
           <div className="approval-list">
             {membershipRequests.filter((x) => x.status === "pending").map((row) => (
               <article key={row.id}>
-                <div><strong>{row.fullName}</strong><small>{row.grade} · No {row.studentNo} · {row.email}</small><small>{row.city} / {row.district} · {row.schoolName}</small></div>
+                <div><strong>{row.fullName}</strong><small>{row.grade} · No {row.studentNo} · {row.email} · {row.phone}</small><small>{row.city} / {row.district} · {row.schoolName}</small></div>
                 <div className="actions"><button className="small" disabled={busy} onClick={() => act("rejectMembership", { id: row.id }, "Başvuru reddedildi.")}>Reddet</button><button className="primary small" disabled={busy} onClick={() => act("approveMembership", { id: row.id }, "Öğrenci hesabı onaylandı.")}>Onayla</button></div>
               </article>
             ))}
@@ -3071,11 +3118,13 @@ function BookForm({
   );
 }
 function StudentForm({
+  memberType="student",
   busy,
   initial,
   submit,
   onDelete,
 }: {
+  memberType?: Student["memberType"];
   busy: boolean;
   initial: Student | null;
   submit: (p: Record<string, unknown>) => Promise<void>;
@@ -3099,7 +3148,7 @@ function StudentForm({
           grade: "",
           contact: "",
           email: "",
-          memberType: "student" as const,
+          memberType,
           blocked: false,
           blockReason: "",
         },
@@ -3118,18 +3167,20 @@ function StudentForm({
         grade: "Sınıfı *",
         contact: "Telefon / İletişim",
         email: "E-posta",
-      }).map(([key, label]) => (
+      }).filter(([key])=>f.memberType==="student"||!["studentNo","grade"].includes(key)).map(([key, label]) => (
         <label key={key}>
           {label}
           <input
             type={key === "email" ? "email" : "text"}
             value={String(f[key as keyof typeof f])}
-            onChange={(e) => setF({ ...f, [key]: e.target.value })}
+            required={f.memberType!=="student" || ["studentNo","grade","fullName"].includes(key)}
+            onChange={(e) => setF({ ...f, [key]: key === "grade" ? normalizeGrade(e.target.value) : e.target.value })}
           />
         </label>
       ))}
+      {f.memberType==="student"&&<small>Sınıf ve şubeyi boşluksuz yazın: 9A, 10B, 12C.</small>}
       <label>Üye türü<select value={f.memberType} onChange={(e) => setF({ ...f, memberType: e.target.value as Student["memberType"] })}><option value="student">Öğrenci</option><option value="teacher">Öğretmen</option><option value="employee">Diğer çalışan</option></select></label>
-      <label className="check-label"><input type="checkbox" checked={f.blocked} onChange={(e) => setF({ ...f, blocked: e.target.checked })} />Bu öğrenciye kitap verilmesin</label>
+      <label className="check-label"><input type="checkbox" checked={f.blocked} onChange={(e) => setF({ ...f, blocked: e.target.checked })} />Bu üyeye kitap verilmesin</label>
       {f.blocked && <label>Engel nedeni<select value={f.blockReason} onChange={(e) => setF({ ...f, blockReason: e.target.value })}><option value="">Neden seçin…</option><option>Çok geç iade</option><option>Kitaba zarar verme</option><option>Uygunsuz davranış</option><option>Ödenmemiş gecikme bedeli</option><option>Yönetici kararı</option></select></label>}
       <div className="form-actions">
         {onDelete && (
@@ -3143,7 +3194,7 @@ function StudentForm({
           </button>
         )}
         <button className={`primary ${initial ? "keep-button-size" : ""}`} disabled={busy}>
-          {initial ? "Değişiklikleri kaydet" : "Öğrenciyi kaydet"}
+          {initial ? "Değişiklikleri kaydet" : "Üyeyi kaydet"}
         </button>
       </div>
     </form>
@@ -3166,17 +3217,17 @@ function ImageThumb({
       <button
         type="button"
         className={`image-thumb ${small ? "small-thumb" : ""}`}
-        onClick={() => src && setLarge(true)}
+        onClick={(event) => {event.stopPropagation(); if(src)setLarge(true);}}
         aria-label={src ? `${alt} büyüt` : alt}
       >
-        {src ? <img src={src} alt={alt} /> : <span>{fallback}</span>}
+        {src ? <img loading="lazy" decoding="async" src={src} alt={alt} /> : <span>{fallback}</span>}
       </button>
       {large && (
         <div
           className="image-modal"
           role="dialog"
           aria-modal="true"
-          onClick={() => setLarge(false)}
+          onClick={(event) => {event.stopPropagation();setLarge(false);}}
         >
           <button aria-label="Kapat">×</button>
           <img src={src} alt={alt} />

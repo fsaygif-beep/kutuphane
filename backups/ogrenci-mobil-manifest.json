@@ -1,0 +1,31 @@
+{
+  "date": "2026-11-02",
+  "tables": {
+    "admin_notes": 3,
+    "app_sessions": 12,
+    "app_users": 6,
+    "book_requests": 1,
+    "books": 7986,
+    "email_logs": 0,
+    "inventory_entries": 4860,
+    "inventory_sessions": 1,
+    "loans": 339,
+    "membership_requests": 2,
+    "school_applications": 1,
+    "schools": 1,
+    "settings": 1,
+    "student_changes": 0,
+    "students": 544
+  },
+  "activeBooks": 5046,
+  "activeLoans": 118,
+  "restore_verified": true,
+  "migration_0019_preserves_every_existing_value": true,
+  "live_database_modified": false,
+  "R2_binaries_included": false,
+  "note": "D1 tabloları salt okunur sayfalarla alındı; tablolar arası atomik anlık görüntü değildir. Görsel dosyaları R2 üzerinde değiştirilmedi.",
+  "file": "kutuphane-ogrenci-mobil-2026-11-02.enc",
+  "sha256": "10c75b60902756f373e4c6d039f93036eec0414b6d0942f6e33368013b9e4b57",
+  "encryption": "AES-256-GCM",
+  "key_in_repository": false
+}

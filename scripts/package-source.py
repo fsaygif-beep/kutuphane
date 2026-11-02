@@ -29,7 +29,7 @@ manifest = {name: hashlib.sha256(path.read_bytes()).hexdigest() for path, name i
 with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
     for path, name in allowed:
         archive.write(path, name)
-    archive.writestr("SOURCE-MANIFEST.json", json.dumps({"release": "2026-11-02-reports", "scope": "source only; no passwords, live records or R2 backup", "sha256": manifest}, ensure_ascii=False, indent=2))
+    archive.writestr("SOURCE-MANIFEST.json", json.dumps({"release": "2026-11-02-student-mobile", "scope": "source only; no passwords, live records or R2 backup", "sha256": manifest}, ensure_ascii=False, indent=2))
 with zipfile.ZipFile(output) as archive:
     assert archive.testzip() is None
 shutil.copy2(output, root / "public/Coklu-Okullu-Kutuphane-Otomasyonu-Son-Surum.zip")
