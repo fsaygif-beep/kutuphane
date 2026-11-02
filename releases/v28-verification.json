@@ -1,0 +1,48 @@
+{
+  "date": "2026-11-02",
+  "site": "https://okulkutuphanesi.com.tr",
+  "version": 28,
+  "version_id": "appgprj_6a8a6bfceee081919b5baf62687c7dc2~appgver_f0d4e683989c819196ab85c41c263342",
+  "deployment_id": "appgdep_6ae8c181caac81918e999e19044a515e",
+  "deployment_status": "succeeded",
+  "source_commit": "fb53cf761eea609becd9db66bce88e224556fac1",
+  "live_site_published": true,
+  "live_zip_download_verified": true,
+  "zip_sha256": "38cc44454216bcb61eb5d4ca2114019b6e637252526a4ae5e867c65a1c9cd20b",
+  "source_zip_setting": "Ayarlar > Veri ve Dönem > Programın Son Sürümü",
+  "protected_records_comparison": {
+    "loans": {
+      "totalRows": 340,
+      "priorRowsVerified": 339,
+      "missingPriorIds": 0,
+      "changedPriorRows": 0
+    },
+    "students": {
+      "totalRows": 544,
+      "priorRowsVerified": 544,
+      "missingPriorIds": 0,
+      "changedPriorRows": 0
+    },
+    "inventory_entries": {
+      "totalRows": 4860,
+      "priorRowsVerified": 4860,
+      "missingPriorIds": 0,
+      "changedPriorRows": 0
+    },
+    "books": {
+      "totalRows": 7986,
+      "priorRowsVerified": 7986,
+      "missingPriorIds": 0,
+      "changedPriorRows": 0
+    }
+  },
+  "protected_records_unchanged": true,
+  "database_schema_extended": true,
+  "tests_passed": 17,
+  "typescript": "passed",
+  "production_build": "passed",
+  "second_school_flow": "passed in isolated test database",
+  "browser_QR_photo_test": "passed",
+  "physical_phone_camera_test": "not performed",
+  "publication_blocker": null
+}
