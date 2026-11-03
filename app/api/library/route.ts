@@ -1,5 +1,6 @@
 import {circulationDelta} from "../../circulation-delta";
-import {normalizeGrade,validGrade,normalizePhone} from "../../student-rules";
+import {normalizeGrade,validGrade,normalizePhone,validPhone} from "../../student-rules";
+import {appSessions} from '../../../db/schema';
 import { inventorySyncSql, protectedBulkArchiveSql, overdueEmail, deliverOverdueEmail } from "../../library-operations";
 import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
 import { env } from "cloudflare:workers";
@@ -226,7 +227,7 @@ export async function POST(request: Request) {
       addBook: "books", updateBook: "books", importBooks: "books",
       importQuestions: "exams", generateExam: "exams",
       loan: "circulation", return: "circulation", renewLoan: "circulation", markSameDayLoan: "circulation",
-      setBookLost: "inventory", createInventorySession: "inventory", countInventoryBook: "inventory", updateInventoryShelf: "inventory", deleteInventorySession: "inventory",
+      setBookLost: "inventory", createInventorySession: "inventory", countInventoryBook: "inventory", updateInventoryShelf: "inventory", saveBookShelf: "inventory", deleteInventorySession: "inventory",
       updateBookRequest: "requests", sendOverdueEmails: "overdue", syncInventoryLoans: "inventory",
     };
     const adminOnly = new Set([
@@ -241,6 +242,7 @@ export async function POST(request: Request) {
       "seed",
       "approveMembership",
       "rejectMembership",
+      "resetMembership",
       "addNote",
       "toggleNote",
       "deleteNote",
@@ -305,13 +307,14 @@ export async function POST(request: Request) {
         if (!row.username || !row.passwordHash || !row.passwordSalt)
           return Response.json({ error: "Bu eski başvuruda kullanıcı adı/parola yok. Öğrenciden yeniden başvuru yapmasını isteyin." }, { status: 409 });
         const [duplicate] = await db.select({ id: appUsers.id }).from(appUsers).where(and(eq(appUsers.schoolId, schoolId), or(eq(appUsers.username, row.username), eq(appUsers.email, row.email),eq(appUsers.studentId,row.matchedStudentId))));
-        if (duplicate) return Response.json({ error: "Bu kullanıcı adı veya e-posta ile hesap zaten var." }, { status: 409 });
+        if (duplicate && (await db.select().from(appUsers).where(eq(appUsers.id,duplicate.id)))[0]?.active) return Response.json({ error: "Bu öğrenci veya cep telefonu için hesap zaten var." }, { status: 409 });
         if(row.phone) {
-          const phones=await db.select({phone:appUsers.phone}).from(appUsers).where(eq(appUsers.schoolId,schoolId));
-          if(phones.some(u=>normalizePhone(u.phone)===normalizePhone(row.phone)))return Response.json({error:"Bu cep telefonu başka bir hesapta kayıtlıdır."},{status:409});
+          const phones=await db.select({id:appUsers.id,phone:appUsers.phone}).from(appUsers).where(eq(appUsers.schoolId,schoolId));
+          if(phones.some(u=>u.id!==duplicate?.id&&normalizePhone(u.phone)===normalizePhone(row.phone)))return Response.json({error:"Bu cep telefonu başka bir hesapta kayıtlıdır."},{status:409});
         }
-        await db.batch([db.insert(appUsers).values({ schoolId, username: row.username, email: row.email, phone: row.phone, displayName: row.fullName, role: "student", permissions: "", studentId: row.matchedStudentId, active: 1, passwordHash: row.passwordHash, passwordSalt: row.passwordSalt, passwordUpdatedAt: now, createdAt: now }),
-          db.update(students).set({email:row.email,...(row.phone?{contact:row.phone}:{})}).where(and(eq(students.id,row.matchedStudentId),eq(students.schoolId,schoolId))),
+        const account={username:row.username,email:row.email,phone:row.phone,displayName:row.fullName,role:"student",permissions:"",studentId:row.matchedStudentId,active:1,passwordHash:row.passwordHash,passwordSalt:row.passwordSalt,passwordUpdatedAt:now};
+        await db.batch([duplicate?db.update(appUsers).set(account).where(and(eq(appUsers.id,duplicate.id),eq(appUsers.schoolId,schoolId))):db.insert(appUsers).values({schoolId,...account,createdAt:now}),
+          db.update(students).set({...(!row.email.endsWith("@phone.local")?{email:row.email}:{}),...(row.phone?{contact:row.phone}:{})}).where(and(eq(students.id,row.matchedStudentId),eq(students.schoolId,schoolId))),
           db.update(membershipRequests).set({status:"approved",reviewedAt:now}).where(and(eq(membershipRequests.id,id),eq(membershipRequests.schoolId,schoolId))),
         ]);
         return Response.json({ok:true});
@@ -420,6 +423,22 @@ export async function POST(request: Request) {
       return Response.json({ ok: true });
     }
 
+    if(action === "resetMembership") {
+      const id=Number(body.id);
+      const [target]=await db.select().from(appUsers).where(and(eq(appUsers.id,id),eq(appUsers.schoolId,schoolId)));
+      if(!target||target.id===identity.id)return Response.json({error:"Başka bir üyenin hesabını seçin."},{status:400});
+      if(target.role==='admin')return Response.json({error:"Yönetici hesabını kullanıcı yönetiminden güncelleyin."},{status:400});
+      await db.batch([db.update(appUsers).set({active:0,passwordHash:'',passwordSalt:'',passwordUpdatedAt:now}).where(and(eq(appUsers.id,id),eq(appUsers.schoolId,schoolId))),db.delete(appSessions).where(eq(appSessions.userId,id))]);
+      return Response.json({ok:true});
+    }
+    if(action === "saveBookShelf") {
+      const bookId=Number(body.bookId),shelf=String(body.shelf??'').trim();
+      if(!shelf)return Response.json({error:'Yeni raf girin.'},{status:400});
+      const [book]=await db.select().from(books).where(and(eq(books.id,bookId),eq(books.schoolId,schoolId)));
+      if(!book)return Response.json({error:'Kitap bulunamadı.'},{status:404});
+      await db.update(books).set({shelf}).where(and(eq(books.id,bookId),eq(books.schoolId,schoolId)));
+      return Response.json({ok:true});
+    }
     if (action === "addStudent") {
       const memberType = ["teacher","employee"].includes(String(body.memberType))?String(body.memberType):"student";
       const studentNo = memberType === "student" ? String(body.studentNo??"").trim() : String(body.studentNo??"").trim() || `MEM-${crypto.randomUUID()}`;
@@ -448,6 +467,7 @@ export async function POST(request: Request) {
         contact: String(body.contact ?? "").trim(),
         email: String(body.email ?? "").trim(),
         memberType,
+        branch: String(body.branch??"").trim(),
         createdAt: now,
       });
       return Response.json({ ok: true }, { status: 201 });
@@ -483,7 +503,8 @@ export async function POST(request: Request) {
           fullName,
           grade,
           contact: String(body.contact ?? "").trim(),
-          email: String(body.email ?? "").trim(),
+          ...(body.email!==undefined?{email:String(body.email).trim()}:{}),
+          branch: String(body.branch??existingMember.branch).trim(),
           memberType,
           blocked: body.blocked ? 1 : 0,
           blockReason: body.blocked
@@ -1039,66 +1060,23 @@ export async function POST(request: Request) {
     }
 
     if (action === "upsertUser") {
-      const username = String(body.username ?? "").trim().toLowerCase();
-      const email = String(body.email ?? "")
-        .trim()
-        .toLowerCase();
-      const displayName = String(body.displayName ?? "").trim();
-      const phone = String(body.phone ?? "").trim();
-      const assignedStudent=Number(body.studentId)||null;
-      if(assignedStudent) {
-        const [member]=await db.select({id:students.id}).from(students).where(and(eq(students.schoolId,schoolId),eq(students.id,assignedStudent)));
-        if(!member)return Response.json({error:"Öğrenci bu okula ait değil."},{status:403});
-      }
-      const password = String(body.password ?? "");
-      const role = ["admin", "staff", "student"].includes(String(body.role))
-        ? String(body.role)
-        : "student";
-      const allowedPermissions = ["circulation", "books", "students", "overdue", "inventory", "reports", "requests"];
-      const permissions = role === "staff" && Array.isArray(body.permissions)
-        ? body.permissions.map(String).filter((value) => allowedPermissions.includes(value)).join(",")
-        : "";
-      if (!username || !email || !displayName)
-        return Response.json(
-          { error: "Kullanıcı adı, ad ve e-posta zorunludur." },
-          { status: 400 },
-        );
-      if (password && password.length < 6)
-        return Response.json({ error: "Parola en az 6 karakter olmalıdır." }, { status: 400 });
-      const [existingAccount] = await db.select({ id: appUsers.id }).from(appUsers).where(and(eq(appUsers.schoolId, schoolId), eq(appUsers.email, email)));
-      if (!existingAccount && !password)
-        return Response.json({ error: "Yeni kullanıcı için geçici parola zorunludur." }, { status: 400 });
-      const salt = password ? crypto.getRandomValues(new Uint8Array(16)) : null;
-      const passwordValues = salt ? { passwordHash: await derivePassword(password, salt), passwordSalt: toBase64(salt), passwordUpdatedAt: now } : {};
-      await db
-        .insert(appUsers)
-        .values({
-          schoolId,
-          username,
-          email,
-          phone,
-          displayName,
-          role,
-          permissions,
-          studentId: Number(body.studentId) || null,
-          active: body.active === false ? 0 : 1,
-          ...passwordValues,
-          createdAt: now,
-        })
-        .onConflictDoUpdate({
-          target: [appUsers.schoolId, appUsers.email],
-          set: {
-            username,
-            displayName,
-            phone,
-            role,
-            permissions,
-            studentId: Number(body.studentId) || null,
-            active: body.active === false ? 0 : 1,
-            ...passwordValues,
-          },
-        });
-      return Response.json({ ok: true });
+      const id=Number(body.id)||0,role=["admin","staff","student"].includes(String(body.role))?String(body.role):"student";
+      const username=String(body.username??'').trim().toLocaleLowerCase('tr'),displayName=String(body.displayName??'').trim(),phone=normalizePhone(body.phone),password=String(body.password??''),assignedStudent=Number(body.studentId)||null;
+      const [existing]=id?await db.select().from(appUsers).where(and(eq(appUsers.id,id),eq(appUsers.schoolId,schoolId))):[];
+      if(id&&!existing)return Response.json({error:'Hesap bulunamadı.'},{status:404});
+      const email=role==='student'?(existing?.email||`${phone}@phone.local`):String(body.email??'').trim().toLowerCase();
+      if(!username||!displayName||!email||(role==='student'&&(!validPhone(phone)||!assignedStudent)))return Response.json({error:'Kullanıcı adı, ad soyad ve giriş bilgilerini doldurun; öğrenci hesabını üyeyle eşleştirin.'},{status:400});
+      if(assignedStudent&&!await db.select({id:students.id}).from(students).where(and(eq(students.id,assignedStudent),eq(students.schoolId,schoolId))).then(rows=>rows[0]))return Response.json({error:'Üye bu okula ait değil.'},{status:403});
+      const accounts=await db.select().from(appUsers).where(eq(appUsers.schoolId,schoolId));
+      if(accounts.some(u=>u.id!==id&&(u.username===username||u.email===email||(phone&&normalizePhone(u.phone)===phone)||(assignedStudent&&u.studentId===assignedStudent))))return Response.json({error:'Kullanıcı adı, telefon veya öğrenci başka bir hesapta kayıtlı.'},{status:409});
+      if(existing?.role==='admin'&&(role!=='admin'||body.active===false)&&accounts.filter(u=>u.role==='admin'&&u.active).length<=1)return Response.json({error:'Son etkin yönetici pasifleştirilemez.'},{status:400});
+      if((password&&password.length<6)||(!existing&&!password))return Response.json({error:'Yeni parola en az 6 karakter olmalıdır.'},{status:400});
+      const salt=password?crypto.getRandomValues(new Uint8Array(16)):null;
+      const passwordValues=salt?{passwordHash:await derivePassword(password,salt),passwordSalt:toBase64(salt),passwordUpdatedAt:now}:{};
+      const allowed=['circulation','books','students','overdue','inventory','reports','requests'];
+      const values={username,email,displayName,phone,role,studentId:assignedStudent,active:body.active===false?0:1,permissions:role==='staff'&&Array.isArray(body.permissions)?body.permissions.map(String).filter(p=>allowed.includes(p)).join(','):'',...passwordValues};
+      await db.batch([existing?db.update(appUsers).set(values).where(and(eq(appUsers.id,id),eq(appUsers.schoolId,schoolId))):db.insert(appUsers).values({schoolId,...values,createdAt:now}),...(assignedStudent&&phone?[db.update(students).set({contact:phone}).where(and(eq(students.id,assignedStudent),eq(students.schoolId,schoolId)))]:[]),...(existing&&(password||body.active===false)?[db.delete(appSessions).where(eq(appSessions.userId,id))]:[])]);
+      return Response.json({ok:true});
     }
 
     if (action === "deleteUser") {

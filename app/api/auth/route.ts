@@ -1,3 +1,5 @@
+import {matchText} from "../../member-matching";
+import {getAppIdentity} from "../../authz";
 import { and, eq, gt, lt } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { appSessions, appUsers, schools, students } from "../../../db/schema";
@@ -39,7 +41,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const body = await request.json() as { email?: string; password?: string };
+  const body = await request.json() as { email?: string; password?: string; switchUser?: boolean };
   const login = String(body.email ?? "").trim().toLocaleLowerCase("tr");
   const phone = login.replace(/\D/g, "").replace(/^90(?=5\d{9}$)/, "").replace(/^0(?=5\d{9}$)/, "");
   const password = String(body.password ?? "");
@@ -48,10 +50,11 @@ export async function POST(request: Request) {
     .from(appUsers).innerJoin(schools, eq(appUsers.schoolId, schools.id)).leftJoin(students, eq(appUsers.studentId, students.id))
     .where(eq(schools.active, 1));
   const normalizedPhone = (value: unknown) => String(value ?? "").replace(/\D/g, "").replace(/^90(?=5\d{9}$)/, "").replace(/^0(?=5\d{9}$)/, "");
-  const schoolUsers = candidates.filter(user => user.email.toLocaleLowerCase("tr") === login || (phone.length >= 10 && [user.phone, user.contact].some((value) => normalizedPhone(value) === phone)));
+  const schoolUsers = candidates.filter(user => (user.role!=="student" && (matchText(user.email)===matchText(login)||matchText(user.username)===matchText(login))) || (phone.length >= 10 && [user.phone, user.contact].some((value) => normalizedPhone(value) === phone)));
   if (schoolUsers.length > 1) return Response.json({ error: "Bu e-posta veya cep telefonu birden fazla okulla eşleşiyor. Okul yöneticinizle iletişime geçin." }, { status: 409 });
   const [platformUser] = schoolUsers.length ? [] : await db.select().from(appUsers).where(and(eq(appUsers.role, "platform_admin"), eq(appUsers.email, login)));
   const user = schoolUsers[0] ?? platformUser;
+  if(body.switchUser){const current=await getAppIdentity(request);if(!current||!user||current.schoolId!==user.schoolId)return Response.json({error:"Bu okulun kullanıcı hesabını seçin."},{status:403});}
   if (!user || !user.active || !user.passwordHash || !user.passwordSalt) {
     await new Promise((resolve) => setTimeout(resolve, 350));
     return Response.json({ error: "E-posta, cep telefonu veya parola yanlış." }, { status: 401 });
@@ -68,6 +71,7 @@ export async function POST(request: Request) {
       await db.update(schools).set({ trialStartedAt: now.toISOString(), trialEndsAt: new Date(now.getTime() + 30 * 86400000).toISOString() }).where(eq(schools.id, school.id));
     }
   }
+  if(body.switchUser){const previous=cookieToken(request);if(previous)await db.delete(appSessions).where(eq(appSessions.tokenHash,await tokenHash(decodeURIComponent(previous))));}
   const expires = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   const token = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");

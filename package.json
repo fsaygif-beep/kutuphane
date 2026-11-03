@@ -10,11 +10,12 @@
     "dev": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vite",
     "build": "vinext build",
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
-    "test": "node --test tests/data-safety.test.mjs tests/report-data.test.mjs tests/student-community-api.test.mjs tests/qr-reader.test.mjs",
+    "test": "node --test tests/data-safety.test.mjs tests/report-data.test.mjs tests/student-community-api.test.mjs tests/qr-reader.test.mjs tests/book-selection.test.mjs",
     "lint": "bash scripts/sites-env.sh -- eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate"
   },
   "dependencies": {
+    "@zxing/library": "^0.23.0",
     "drizzle-orm": "0.45.2",
     "jsbarcode": "^3.12.3",
     "jsqr": "^1.4.0",

@@ -3,6 +3,8 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type {WorkSheet} from "xlsx";
 import { matchingRecords, memberActiveLoans } from "./circulation-selection";
+import {sameBookIdentity,selectedInventoryBook} from "./book-identity";
+import {MyReviews,Recommendations,Messages,SwitchUser} from "./member-portal";
 import {QrScanner} from "./qr-scanner";
 import { LocationFields } from "./location-fields";
 import {normalizeGrade,validGrade} from "./student-rules";
@@ -23,6 +25,7 @@ export type Student = {
   fullName: string;
   grade: string;
   contact: string;
+  branch?: string;
   email: string;
   photoKey: string;
   blocked: number;
@@ -159,6 +162,9 @@ type Tab =
   | "account"
   | "reading"
   | "lists"
+  | "myreviews"
+  | "recommendations"
+  | "messages"
   | "settings";
 
 const menu: Array<[Tab, string, string]> = [
@@ -172,6 +178,9 @@ const menu: Array<[Tab, string, string]> = [
   ["reports", "Raporlar", "▥"],
   ["reading", "Okuduğum Kitaplar", "▤"],
   ["lists", "Okuma Listelerim", "☷"],
+  ["myreviews", "Yorumlarım", "✎"],
+  ["recommendations", "Tavsiye Listesi", "☷"],
+  ["messages", "Mesajlar", "✉"],
   ["requests", "Talepler ve Şikâyetler", "✎"],
   ["settings", "Ayarlar", "⚙"],
   ["notes", "Notlar", "✓"],
@@ -381,12 +390,12 @@ function LoginScreen({ onLogin }: { onLogin: () => Promise<void> }) {
   };
   return <main className="login-page">
     <section className="login-panel">
-      <div className="login-brand"><span className="mark">K</span><div><strong>Okul Kütüphane Otomasyonu</strong><small>E-posta veya kayıtlı cep telefonu ile güvenli erişim</small></div></div>
+      <div className="login-brand"><span className="mark">K</span><div><strong>Okul Kütüphane Otomasyonu</strong><small>Öğrenciler için cep telefonu ve parola ile güvenli erişim</small></div></div>
       <div className="login-copy"><p className="eyebrow">OKUL KÜTÜPHANESİ YÖNETİMİ</p><h1>Okul kütüphanenizi tek panelden yönetin.</h1><p>Kitap ve üye kayıtlarını, ödünç-iade işlemlerini, raf kontrolünü ve kütüphane raporlarını güvenli bir çevrim içi sistemde yönetin.</p></div>
       {studentApplicationMode ? <form className="login-form school-application" onSubmit={applyStudent}>
         <LocationFields city={studentApplication.city} district={studentApplication.district} onChange={(city,district)=>setStudentApplication({...studentApplication,city,district})}/>
-        <p>Sınıf ve şubeyi arada boşluk veya işaret olmadan yazın: 9A, 10B, 12C. Örneğin “9 A”, “9-A” yerine “9A”.</p>
-        {Object.entries({ schoolName: "Okul adı", institutionCode: "Kurum kodu", fullName: "Adı soyadı", grade: "Sınıf ve şube (ör. 10A)", studentNo: "Öğrenci numarası", email: "E-posta", phone: "Cep telefonu (05XXXXXXXXX)", password: "En az 6 karakter parola" }).map(([key, label]) => <label key={key}>{label}<input type={key === "password" ? "password" : key === "email" ? "email" : key === "phone" ? "tel" : "text"} value={studentApplication[key as keyof typeof studentApplication]} onChange={(event) => setStudentApplication({ ...studentApplication, [key]: key === "grade" ? normalizeGrade(event.target.value) : event.target.value })} required minLength={key === "password" ? 6 : undefined} /></label>)}
+
+        {Object.entries({ schoolName: "Okul adı", fullName: "Adı soyadı", grade: "Sınıf ve şube (ör. 10A)", studentNo: "Öğrenci numarası", phone: "Cep telefonu (05XXXXXXXXX)", password: "En az 6 karakter parola" }).map(([key, label]) => <label key={key}>{label}<input type={key === "password" ? "password" : key === "email" ? "email" : key === "phone" ? "tel" : "text"} value={studentApplication[key as keyof typeof studentApplication]} onChange={(event) => setStudentApplication({ ...studentApplication, [key]: key === "grade" ? normalizeGrade(event.target.value) : event.target.value })} required minLength={key === "password" ? 6 : undefined} /></label>)}
         {error && <p className="login-error">{error}</p>}
         <button className="login-button" disabled={busy}>Üyelik talebi gönder <span>→</span></button>
         <button type="button" className="secondary" onClick={() => setStudentApplicationMode(false)}>Giriş ekranına dön</button>
@@ -396,7 +405,7 @@ function LoginScreen({ onLogin }: { onLogin: () => Promise<void> }) {
         <button className="login-button" disabled={busy}>Okul başvurusu gönder <span>→</span></button>
         <button type="button" className="secondary" onClick={() => setApplicationMode(false)}>Giriş ekranına dön</button>
       </form> : <form className="login-form" onSubmit={setupMode ? activate : submit}>
-        <label>{setupMode ? "Kullanıcı adı" : "E-posta veya cep telefonu"}<input type="text" inputMode={setupMode ? undefined : "email"} autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} required /></label>
+        <label>{setupMode ? "Kullanıcı adı" : "Öğrenci: cep telefonu · Yetkili: kullanıcı adı / e-posta"}<input type="text" autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} required /></label>
         <label>{setupMode ? "Yeni parola" : "Parola"}<input type="password" autoComplete={setupMode ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} required minLength={6} /></label>
         {error && <p className="login-error">{error}</p>}
         <button className="login-button" disabled={busy || !username || password.length < 6}>{busy ? "İşleniyor…" : setupMode ? "Merkez yönetici hesabını etkinleştir" : "Giriş yap"}<span>→</span></button>
@@ -546,10 +555,10 @@ export default function LibraryApp() {
   };
   const visibleMenu = menu.filter(
     ([id]) =>
-      role === "admin" ? !["reading","lists"].includes(id) :
+      role === "admin" ? !["reading","lists","myreviews"].includes(id) :
       (role === "staff"
         ? ["dashboard", "settings"].includes(id) || Boolean(tabPermission[id] && permissions.includes(tabPermission[id]!))
-        : ["dashboard", "books", "requests", "settings", "reading", "lists"].includes(id)),
+        : ["dashboard", "books", "requests", "settings", "reading", "lists", "myreviews", "recommendations", "messages"].includes(id)),
   );
   return (
     <div className="shell" data-theme={data.settings.theme || "forest"} style={{ "--ui-font": `${data.settings.uiFont === "Inter" ? "Arial" : data.settings.uiFont}, sans-serif`, "--title-font": `${data.settings.titleFont}, serif`, "--base-size": `${data.settings.baseFontSize}px`, "--ink": data.settings.textColor, "--green": data.settings.accentColor, "--paper": data.settings.surfaceColor } as React.CSSProperties}>
@@ -614,8 +623,10 @@ export default function LibraryApp() {
               })}
             </strong>
           </div>
+          <SwitchUser onChanged={()=>{setTab("dashboard");void load();}}/>
           <button className="header-signout" onClick={() => void signOut()}><span>↪</span> Çıkış</button>
         </header>
+        {role==="student"&&overdue.length>0&&<div className="overdue-student-warning" role="alert"><strong>UYARI</strong><span>Teslim tarihi geçen {overdue.length} kitabınız var. Lütfen kitaplarınızı okul kütüphanesine teslim edin.</span></div>}
         {notice && (
           <div className="notice" onClick={() => setNotice("")}>
             {notice}
@@ -635,6 +646,9 @@ export default function LibraryApp() {
         )}
         {tab === "reading" && role === "student" && <StudentReading student={data.students[0]} loans={data.loans} books={data.books}/>}
         {tab === "lists" && role === "student" && <ReadingLists books={data.books}/>}
+        {tab === "myreviews" && role === "student" && <MyReviews books={data.books}/>}
+        {tab === "recommendations" && (role === "admin"||role === "student") && <Recommendations books={data.books} studentMode={role==="student"}/>}
+        {tab === "messages" && (role === "admin"||role === "student") && <Messages students={data.students} overdueIds={overdue.map(l=>l.studentId)} studentMode={role==="student"}/>}
         {(tab === "circulation" || tab === "returns") && (
           <Circulation
             key={tab}
@@ -930,9 +944,8 @@ function Books({
     .filter((x) => !authorFilter || x.author === authorFilter)
     .filter((x) => !statusFilter || (statusFilter === "lost" ? Boolean(x.lost) : statusFilter === "loaned" ? active.some((loan) => loan.bookId === x.id) : !x.lost && !active.some((loan) => loan.bookId === x.id)));
   const selectedBook = books.find((book) => book.id === selectedBookId);
-  const normalizeBookValue = (value: string) => value.trim().replace(/\s+/g, " ").toLocaleUpperCase("tr");
   const selectedBookLoans = selectedBook
-    ? loans.filter((loan) => normalizeBookValue(loan.bookTitle) === normalizeBookValue(selectedBook.title) && normalizeBookValue(loan.author) === normalizeBookValue(selectedBook.author))
+    ? loans.filter((loan) => sameBookIdentity({title:loan.bookTitle,author:loan.author},selectedBook))
     : [];
   const exportRows = () =>
     downloadExcel(
@@ -1077,15 +1090,14 @@ function Books({
               >
                 {book.lost ? "Kayıp" : active.some((x) => x.bookId === book.id) ? "Ödünçte" : "Rafta"}
               </span>
-              <h3>{book.title}</h3><button className="small" onClick={e=>{e.stopPropagation();setSelectedBookId(book.id);}}>Yorumlar</button>
+              <h3>{book.title}</h3>
               <p>{book.author}</p>
               {book.category && <small className="book-category">{book.category}</small>}
               <small>
                 {book.inventoryNo} · {book.shelf || "Raf belirtilmedi"}
               </small>
-              {!readOnly && (
                 <div className="inline-actions">
-                  <label className="image-upload" onClick={(event) => event.stopPropagation()}>
+                  {!readOnly && <><label className="image-upload" onClick={(event) => event.stopPropagation()}>
                     {book.coverKey ? "Kapağı değiştir" : "Kapak ekle"}
                     <input
                       type="file"
@@ -1108,9 +1120,9 @@ function Books({
                     }}
                   >
                     Düzenle
-                  </button>
+                  </button></>}
+                  <button type="button" className="edit-link book-review-link" onClick={e=>{e.stopPropagation();setSelectedBookId(book.id);}}>Yorumlar</button>
                 </div>
-              )}
             </div>
           </article>
         ))}
@@ -1165,7 +1177,7 @@ function Students({
         "ADI SOYADI": x.fullName,
         SINIFI: x.grade,
         TELEFON: x.contact,
-        "E-POSTA": x.email,
+        BRANŞI: x.branch||"",
       })),
     );
   const mapRows = (raw: Record<string, unknown>[]) =>
@@ -1374,7 +1386,7 @@ function Students({
               <th>Öğrenci</th>
               <th>Sınıf</th>
               <th>İletişim</th>
-              <th>E-posta</th>
+              <th>Branşı</th>
               <th>Okuduğu</th>
               <th></th>
             </tr>
@@ -1427,7 +1439,7 @@ function Students({
                   <span className="badge blue">{x.grade}</span>
                 </td>
                 <td>{x.contact || "—"}</td>
-                <td>{x.email || "—"}</td>
+                <td>{x.branch || "—"}</td>
                 <td>
                   {
                     loans.filter((l) => l.studentId === x.id && l.returnedAt)
@@ -1472,9 +1484,10 @@ function Overdue({
   act: (a: string, p: Record<string, unknown>, s: string) => Promise<boolean>;
 }) {
   const [query, setQuery] = useState("");
-  const shown = rows.filter((row) => `${row.studentName} ${row.studentNo} ${row.grade} ${row.email} ${row.bookTitle} ${row.author} ${row.inventoryNo}`.toLocaleLowerCase("tr").includes(query.trim().toLocaleLowerCase("tr")));
+  const shown = rows.filter((row) => `${row.studentName} ${row.studentNo} ${row.grade} ${row.contact} ${row.bookTitle} ${row.author} ${row.inventoryNo}`.toLocaleLowerCase("tr").includes(query.trim().toLocaleLowerCase("tr")));
   const [selected, setSelected] = useState<Set<number>>(new Set());
-  const selectable = shown.filter((row) => row.email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email.trim()));
+  const [showPhones,setShowPhones]=useState(false);
+  const selectable = shown;
   const selectedIds = selectable.filter((row) => selected.has(row.id)).map((row) => row.id);
   const allSelected = selectable.length > 0 && selectedIds.length === selectable.length;
   const reportRows = shown.map((x, index) => ({
@@ -1492,6 +1505,7 @@ function Overdue({
       currency: "TRY",
     }),
   }));
+  const phoneRows=shown.filter(x=>!selectedIds.length||selectedIds.includes(x.id)).map(x=>({"AD SOYAD":x.studentName,"SINIF":x.grade,"NUMARA":x.studentNo,"ALDIĞI KİTAP":x.bookTitle,"CEP TELEFONU":x.contact||"Kayıtlı değil"}));
   const exportWord = () => {
     const headings = Object.keys(reportRows[0] ?? {});
     const table = `<table border="1" cellspacing="0" cellpadding="6"><thead><tr>${headings.map((x) => `<th>${x}</th>`).join("")}</tr></thead><tbody>${reportRows.map((row) => `<tr>${headings.map((key) => `<td>${String(row[key as keyof typeof row] ?? "")}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
@@ -1536,17 +1550,18 @@ function Overdue({
     <section>
       <PageHead
         title="Geç Kalanlar"
-        text="Teslim tarihi geçen kitapları takip edin ve e-posta adresi bulunan öğrencilere toplu hatırlatma gönderin."
+        text="Teslim tarihi geçen kitapları ve üyelerin iletişim bilgilerini takip edin."
         action={<div className="actions overdue-actions">
           <button className="secondary" disabled={!shown.length} onClick={() => downloadExcel("gec-kalanlar.xlsx", "Geç Kalanlar", reportRows)}>Excel</button>
           <button className="secondary" disabled={!shown.length} onClick={exportWord}>Word</button>
           <button className="secondary" disabled={!shown.length} onClick={exportPdf}>PDF</button>
           <button className="secondary" disabled={!shown.length} onClick={exportPng}>PNG</button>
-          <button className="primary" disabled={busy || !selectedIds.length} onClick={async () => { if (!confirm(`${new Set(shown.filter((row) => selectedIds.includes(row.id)).map((row) => row.studentId)).size} üyeye seçili geciken kitapları için e-posta gönderilsin mi?`)) return; if (await act("sendOverdueEmails", { loanIds: selectedIds }, "E-posta işlemi tamamlandı.")) setSelected(new Set()); }}>Seçilenlere e-posta gönder ({selectedIds.length})</button>
+          <button className="primary" onClick={()=>setShowPhones(v=>!v)}>Gecikenlerin Cep Telefonları</button>
         </div>}
       />
-      <Search value={query} setValue={setQuery} placeholder="Üye adı, numara, sınıf, e-posta, kitap, yazar veya DN ile ara" />
-      <div className="actions"><button className="secondary" disabled={busy || !selectable.length} onClick={() => setSelected((current) => { const next = new Set(current); selectable.forEach((row) => allSelected ? next.delete(row.id) : next.add(row.id)); return next; })}>{allSelected ? "Seçimi kaldır" : "Tümünü seç"}</button><span>{shown.length} / {rows.length} kayıt · Seçim ve gönderim mevcut arama sonuçlarına uygulanır. E-posta adresi olmayan üyeler seçilemez.</span></div>
+      <Search value={query} setValue={setQuery} placeholder="Üye adı, numara, sınıf, telefon, kitap, yazar veya DN ile ara" />
+      <div className="actions"><button className="secondary" disabled={busy || !selectable.length} onClick={() => setSelected((current) => { const next = new Set(current); selectable.forEach((row) => allSelected ? next.delete(row.id) : next.add(row.id)); return next; })}>{allSelected ? "Seçimi kaldır" : "Tümünü seç"}</button><span>{shown.length} / {rows.length} kayıt · Seçim ve telefon listesi mevcut arama sonuçlarına uygulanır.</span></div>
+      {showPhones&&<section className="card community-card"><h3>Gecikenlerin Cep Telefonları</h3><div className="actions"><button disabled={!phoneRows.length} onClick={()=>downloadExcel("gecikenlerin-cep-telefonlari.xlsx","Cep Telefonları",phoneRows)}>Excel indir</button><button disabled={!phoneRows.length} onClick={()=>downloadCsv("gecikenlerin-cep-telefonlari.csv",phoneRows)}>CSV indir</button></div><p>Seçim varsa seçili kayıtlar, yoksa arama sonucundaki tüm gecikenler gösterilir.</p><div className="table-card"><table><thead><tr>{Object.keys(phoneRows[0]||{}).map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{phoneRows.map((row,i)=><tr key={i}>{Object.values(row).map((v,j)=><td key={j}>{v}</td>)}</tr>)}</tbody></table></div></section>}
       <div className="table-card">
         <table>
           <thead>
@@ -1580,7 +1595,7 @@ function Overdue({
                 <td>
                   <Photo hidden imageKey={x.studentPhotoKey} name={x.studentName} kind="member"/>
                   <small>
-                    {x.studentNo} · {x.grade} · {x.email || "E-posta yok"}
+                    {x.studentNo} · {x.grade}
                   </small>
                 </td>
                 <td>
@@ -1927,9 +1942,10 @@ function Reports({ data }: { data: Data }) {
           />
         </Card>
       </div>
-      {(selectedReader || selectedTitle) && <div ref={detailRef} className="report-detail" role="region" aria-live="polite" aria-label="Seçilen okuma ayrıntıları"><Card title={selectedReader ? `${selectedReader.name} — okuduğu kitaplar` : `${selectedTitle?.title} — okuyan üyeler`} action="Kapat" onAction={() => setDetail(null)}>
+      {(selectedReader || selectedTitle) && <div ref={detailRef} className="report-detail" role="region" aria-live="polite" aria-label="Seçilen okuma ayrıntıları"><Card title={selectedReader ? "Okuduğu kitaplar" : "Okuyan üyeler"} action="Kapat" onAction={() => setDetail(null)}>
+        <div className="report-selected-identity"><Photo imageKey={selectedReader ? (data.students.find(student=>student.id===selectedReader.id)?.photoKey || detailRows[0]?.studentPhotoKey || "") : (detailRows.find(loan=>loan.bookCoverKey)?.bookCoverKey || "")} name={selectedReader?.name || selectedTitle?.title || ""} kind={selectedReader?"member":"book"}/><strong>{selectedReader?.name || selectedTitle?.title}</strong></div>
         <p className="report-detail-note">{fmt(startDate)} – {fmt(endDate)} tarihleri arasındaki sıralamaya dahil edilen {detailRows.length} tamamlanmış ödünç işlemi.</p>
-        <div className="table-wrap"><table><thead><tr><th>Üye</th><th>Kitap</th><th>Alış</th><th>İade</th></tr></thead><tbody>{detailRows.map((loan) => <tr key={loan.id}><td><Photo imageKey={loan.studentPhotoKey} name={loan.studentName} kind="member"/><strong>{loan.studentName}</strong><small>{loan.studentNo} · {loan.grade}</small></td><td><Photo imageKey={loan.bookCoverKey} name={loan.bookTitle}/><strong>{loan.bookTitle}</strong><small>{loan.author} · DN {loan.inventoryNo}</small></td><td>{fmt(loan.loanedAt)}</td><td>{fmt(loan.returnedAt!)}</td></tr>)}</tbody></table></div>
+        <div className="table-wrap"><table><thead><tr><th>Üye</th><th>Kitap</th><th>Alış</th><th>İade</th></tr></thead><tbody>{detailRows.map((loan) => <tr key={loan.id}><td><strong>{loan.studentName}</strong><small>{loan.studentNo} · {loan.grade}</small></td><td><strong>{loan.bookTitle}</strong><small>{loan.author} · DN {loan.inventoryNo}</small></td><td>{fmt(loan.loanedAt)}</td><td>{fmt(loan.returnedAt!)}</td></tr>)}</tbody></table></div>
       </Card></div>}
     </section>
   );
@@ -1940,6 +1956,9 @@ function InventoryPersistent({ books, active, sessions, entries, today, busy, ac
   const [showNew, setShowNew] = useState(!sessions.length), [countNo, setCountNo] = useState(""), [countDate, setCountDate] = useState(today);
   const [sessionKey, setSessionKey] = useState(sessions[0] ? String(sessions[0].id) : ""), [query, setQuery] = useState(""), deferredQuery = useDeferredValue(query);
   const [shelf, setShelf] = useState(""), [categoryFilter, setCategoryFilter] = useState(""), [shelfFilter, setShelfFilter] = useState("");
+  const [selectedMatches,setSelectedMatches]=useState<Set<number>>(new Set());
+  const [countingMatches,setCountingMatches]=useState(false);
+  const countingRef=useRef(false);
   const [selectedBookId, setSelectedBookId] = useState(0), [optimisticIds, setOptimisticIds] = useState<Set<number>>(new Set()), [compareA, setCompareA] = useState(""), [compareB, setCompareB] = useState("");
   useEffect(()=>setOptimisticIds(new Set()),[sessionKey]);
   const session = sessions.find((x) => String(x.id) === sessionKey) || sessions[0];
@@ -1957,13 +1976,24 @@ function InventoryPersistent({ books, active, sessions, entries, today, busy, ac
   const shelves = useMemo(() => [...new Set(books.map((book) => book.shelf).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"tr",{numeric:true})), [books]);
   const normalizeSearch = (value: string) => value.toLocaleLowerCase("tr").replace(/\s+/g," ").trim();
   const searchMatches = useMemo(() => { const needle=normalizeSearch(deferredQuery); if(!needle) return []; return books.filter((book)=>normalizeSearch(`${book.inventoryNo} ${book.isbn} ${book.title} ${book.author}`).includes(needle)).slice(0,30); }, [books,deferredQuery]);
-  const exact = useMemo(() => { const needle=normalizeSearch(query); return books.find((book)=>[book.inventoryNo,book.isbn].some(value=>value&&normalizeSearch(value)===needle)) || books.find(book=>book.id===selectedBookId) || (searchMatches.length===1?searchMatches[0]:undefined); }, [books,query,selectedBookId,searchMatches]);
+  const exact = useMemo(() => selectedInventoryBook(books,query,selectedBookId,searchMatches), [books,query,selectedBookId,searchMatches]);
   const visibleBooks = useMemo(() => books.filter(book=>(!categoryFilter||book.category===categoryFilter)&&(!shelfFilter||book.shelf===shelfFilter)), [books,categoryFilter,shelfFilter]);
   const remainingBooks = useMemo(() => visibleBooks.filter(book=>!countedIds.has(book.id)), [visibleBooks,countedIds]);
   const countedBooks = useMemo(() => visibleBooks.filter(book=>countedIds.has(book.id)).sort((a,b)=>(entryByBook.get(b.id)?.countedAt||"").localeCompare(entryByBook.get(a.id)?.countedAt||"")), [visibleBooks,countedIds,entryByBook]);
   const create = async () => { if (!countNo.trim() || !countDate) return alert("Sayım numarası ve tarih girin."); const ok=await act("createInventorySession",{countNo,countDate},"Sayım açıldı; aynı numara ve tarihle daha sonra devam edebilirsiniz."); if(ok){setShowNew(false);setCountNo("");} };
   const deleteSession = async () => { if (!session || !confirm(`#${session.countNo} numaralı ${fmt(session.countDate)} tarihli sayım ve içindeki tüm sayılan kitap kayıtları silinsin mi?`)) return; const ok = await act("deleteInventorySession", { sessionId: session.id }, "Sayım kaydı silindi."); if (ok) { setSessionKey(""); setOptimisticIds(new Set()); } };
-  const countBook = async (book?: Book) => { if(!session)return alert("Önce yeni bir sayım açın veya kayıtlı sayımı seçin."); if(!book)return alert(searchMatches.length>1?"Birden fazla kitap bulundu. Listeden doğru kitabı seçin.":"Bu bilgiyle kayıtlı kitap bulunamadı."); if(countedIds.has(book.id))return alert("Bu kitap bu sayımda zaten sayıldı."); setOptimisticIds(current=>new Set(current).add(book.id)); const ok=await act("countInventoryBook",{sessionId:session.id,bookId:book.id,shelf},"Kitap sayıma kaydedildi."); if(ok){setQuery("");setShelf("");setSelectedBookId(0);}else setOptimisticIds(current=>{const next=new Set(current);next.delete(book.id);return next;}); };
+  const countBook = async (book?: Book) => { if(countingRef.current)return; if(!session)return alert("Önce yeni bir sayım açın veya kayıtlı sayımı seçin."); if(!book)return alert(searchMatches.length>1?"Birden fazla kitap bulundu. Listeden doğru kitabı seçin.":"Bu bilgiyle kayıtlı kitap bulunamadı."); if(countedIds.has(book.id))return alert("Bu kitap bu sayımda zaten sayıldı."); setOptimisticIds(current=>new Set(current).add(book.id)); const ok=await act("countInventoryBook",{sessionId:session.id,bookId:book.id,shelf},"Kitap sayıma kaydedildi."); if(ok){setQuery("");setShelf("");setSelectedBookId(0);}else setOptimisticIds(current=>{const next=new Set(current);next.delete(book.id);return next;}); };
+  const countMatches = async () => {
+    if(!session||busy||countingRef.current)return;
+    const chosen=searchMatches.filter(book=>selectedMatches.has(book.id)&&!countedIds.has(book.id));
+    if(!chosen.length)return;
+    countingRef.current=true;setCountingMatches(true);
+    try {for(const book of chosen) {
+      const ok=await act("countInventoryBook",{sessionId:session.id,bookId:book.id,shelf},"Seçili kitap sayıma kaydedildi.");
+      if(!ok)break;
+      setSelectedMatches(current=>{const next=new Set(current);next.delete(book.id);return next;});
+    }}finally{countingRef.current=false;setCountingMatches(false);}
+  };
   const comparison = useMemo(() => { const a=Number(compareA),b=Number(compareB); if(!a||!b||a===b)return null; const aa=new Set(entries.filter(x=>x.sessionId===a).map(x=>x.bookId)),bb=new Set(entries.filter(x=>x.sessionId===b).map(x=>x.bookId)); return {onlyA:books.filter(x=>aa.has(x.id)&&!bb.has(x.id)),onlyB:books.filter(x=>bb.has(x.id)&&!aa.has(x.id)),common:books.filter(x=>aa.has(x.id)&&bb.has(x.id))}; }, [compareA,compareB,entries,books]);
   const download = () => {
     if (!comparison) return;
@@ -1975,7 +2005,7 @@ function InventoryPersistent({ books, active, sessions, entries, today, busy, ac
     <PageHead title="Kitap Sayımı ve Raf Kontrol" text="Tarihli sayımları kaydedin, yarım kalan sayıma devam edin ve iki sayımı karşılaştırın." action={<button className="primary" onClick={() => setShowNew(true)}>Yeni sayım</button>} />
     {showNew && <Card title="Yeni sayım"><div className="form-grid three"><label>Sayım numarası<input value={countNo} onChange={e=>setCountNo(e.target.value)} placeholder="Örn. 2026-01" /></label><label>Sayım tarihi<input type="date" value={countDate} onChange={e=>setCountDate(e.target.value)} /></label><button className="primary" disabled={busy} onClick={()=>void create()}>Sayımı başlat / devam et</button></div></Card>}
     <div className="grid-2">
-      <Card title="Aktif sayım"><div className="form-grid one"><label>Kayıtlı sayım<select value={session?.id || ""} onChange={e=>{setSessionKey(e.target.value);setOptimisticIds(new Set());}}><option value="">Seçin…</option>{sessions.map(x=><option key={x.id} value={x.id}>#{x.countNo} · {fmt(x.countDate)} · {entries.filter(e=>e.sessionId===x.id).length} kitap</option>)}</select></label><button className="danger" disabled={busy||!session} onClick={()=>void deleteSession()}>Kayıtlı sayımı sil</button><div className="form-grid two"><label>Kategori<select value={categoryFilter} onChange={e=>setCategoryFilter(e.target.value)}><option value="">Tüm kategoriler</option>{categories.map(x=><option key={x}>{x}</option>)}</select></label><label>Raf<select value={shelfFilter} onChange={e=>setShelfFilter(e.target.value)}><option value="">Tüm raflar</option>{shelves.map(x=><option key={x}>{x}</option>)}</select></label></div><label>DN / ISBN / Kitap / Yazar<input autoFocus value={query} onChange={e=>{setQuery(e.target.value);setSelectedBookId(0);}} onKeyDown={e=>{if(e.key==="Enter")void countBook(exact);}} placeholder="Okutun veya kitap-yazar adı yazın" /></label>{query.trim()&&searchMatches.length>1&&<label>Eşleşen kitap<select value={selectedBookId} onChange={e=>setSelectedBookId(Number(e.target.value))}><option value="">Doğru kitabı seçin…</option>{searchMatches.map(book=><option key={book.id} value={book.id}>{book.inventoryNo} · {book.title} · {book.author}</option>)}</select></label>}<QrScanner disabled={busy||!session} onScan={value=>{setQuery(value);setSelectedBookId(0);}}/><label>Yeni raf (isteğe bağlı)<input value={shelf} onChange={e=>setShelf(e.target.value)} placeholder={exact?.shelf||"Mevcut raf korunur"}/></label>{exact&&<p className="muted"><b>{exact.title}</b> · {exact.author} · Raf {exact.shelf||"—"}</p>}<button className="primary" disabled={busy||!session||!query.trim()} onClick={()=>void countBook(exact)}>Kitabı say</button></div></Card>
+      <Card title="Aktif sayım"><div className="form-grid one"><label>Kayıtlı sayım<select disabled={countingMatches} value={session?.id || ""} onChange={e=>{setSessionKey(e.target.value);setOptimisticIds(new Set());setSelectedMatches(new Set());setSelectedBookId(0);}}><option value="">Seçin…</option>{sessions.map(x=><option key={x.id} value={x.id}>#{x.countNo} · {fmt(x.countDate)} · {entries.filter(e=>e.sessionId===x.id).length} kitap</option>)}</select></label><button className="danger" disabled={busy||!session} onClick={()=>void deleteSession()}>Kayıtlı sayımı sil</button><div className="form-grid two"><label>Kategori<select value={categoryFilter} onChange={e=>setCategoryFilter(e.target.value)}><option value="">Tüm kategoriler</option>{categories.map(x=><option key={x}>{x}</option>)}</select></label><label>Raf<select value={shelfFilter} onChange={e=>setShelfFilter(e.target.value)}><option value="">Tüm raflar</option>{shelves.map(x=><option key={x}>{x}</option>)}</select></label></div><label>DN / ISBN / Kitap / Yazar<input disabled={countingMatches} autoFocus value={query} onChange={e=>{setQuery(e.target.value);setSelectedBookId(0);setSelectedMatches(new Set());}} onKeyDown={e=>{if(e.key==="Enter")void countBook(exact);}} placeholder="Okutun veya kitap-yazar adı yazın" /></label>{query.trim()&&searchMatches.length>1&&<fieldset className="inventory-matches" disabled={busy||countingMatches}><legend>Eşleşen kitap</legend><p>Bir veya birden fazla nüshayı işaretleyin. Her nüsha kendi demirbaş numarasıyla sayılır.</p>{searchMatches.map(book=><label className="check-label" key={book.id}><input type="checkbox" disabled={countedIds.has(book.id)} checked={selectedMatches.has(book.id)} onChange={e=>{const checked=e.target.checked;setSelectedBookId(checked?book.id:0);setSelectedMatches(current=>{const next=new Set(current);checked?next.add(book.id):next.delete(book.id);return next;});}}/><span>{book.inventoryNo} · {book.title} · {book.author}{countedIds.has(book.id)?" — Sayıldı":""}</span></label>)}<button type="button" className="primary" disabled={!session||!searchMatches.some(book=>selectedMatches.has(book.id)&&!countedIds.has(book.id))} onClick={()=>void countMatches()}>Seçili kitapları say ({searchMatches.filter(book=>selectedMatches.has(book.id)&&!countedIds.has(book.id)).length})</button></fieldset>}<QrScanner disabled={busy||countingMatches||!session} onScan={value=>{setQuery(value);setSelectedBookId(0);setSelectedMatches(new Set());}}/><div className="shelf-save-field"><span className="shelf-save-heading"><label htmlFor="inventory-new-shelf">Yeni raf (isteğe bağlı)</label>{shelf.trim()&&exact&&shelf.trim()!==exact.shelf&&<button type="button" className="small" disabled={busy||countingMatches} onClick={async()=>{if(await act("saveBookShelf",{bookId:exact.id,shelf},"Kitabın rafı kaydedildi; sayım durumu değişmedi."))setShelf("");}}>Kaydet</button>}</span><input id="inventory-new-shelf" disabled={countingMatches} value={shelf} onChange={e=>setShelf(e.target.value)} placeholder={exact?.shelf||"Mevcut raf korunur"}/></div>{exact&&<p className="muted"><b>{exact.title}</b> · {exact.author} · Raf {exact.shelf||"—"}</p>}{(searchMatches.length<=1||Boolean(exact&&!selectedMatches.size))&&<button className="primary" disabled={busy||countingMatches||!session||!exact||countedIds.has(exact.id)} onClick={()=>void countBook(exact)}>Kitabı say</button>}</div></Card>
       <Card title={`Sayım özeti (${sessionEntries.length}/${books.length})`}><div className="inventory-summary"><span><b>{sessionEntries.length}</b>Sayılan</span><span><b>{Math.max(0, books.length-sessionEntries.length)}</b>Sayılmayan</span><span><b>{sessionEntries.filter(e=>e.shelfBefore!==e.shelfAfter).length}</b>Rafı değişen</span></div><p className="muted">Son işlem: {session ? new Date(session.updatedAt).toLocaleString("tr-TR") : "—"}</p></Card>
     </div>
     <div className="inventory-transfer-grid"><Card title={`Kayıtlı kitaplar - sayılmayı bekleyen (${remainingBooks.length})`}><div className="inventory-book-list">{remainingBooks.slice(0,listLimit).map(book=><article key={book.id}><Photo imageKey={book.coverKey} name={book.title}/><div><strong>{book.title}</strong><small>{book.author} · DN {book.inventoryNo} · Raf {book.shelf||"—"}</small><small>{book.category||"Kategori yok"}</small></div><button className="secondary compact" disabled={busy||!session} onClick={()=>void countBook(book)}>Say</button></article>)}{!remainingBooks.length&&<Empty text="Bu filtrede sayılmayı bekleyen kitap kalmadı."/>}</div></Card><Card title={`Sayımı yapılan kitaplar (${countedBooks.length})`}><div className="inventory-book-list counted">{countedBooks.slice(0,listLimit).map(book=>{const entry=entryByBook.get(book.id);return <article key={book.id}><Photo imageKey={book.coverKey} name={book.title}/><div><strong>{book.title}</strong><small>{book.author} · DN {book.inventoryNo}</small><small>{entry?new Date(entry.countedAt).toLocaleString("tr-TR"):"Kaydediliyor…"}</small>{entry?.source === "loan" && <span className="badge blue">Ödünç işlemi nedeniyle otomatik sayıldı</span>}</div><div className="inventory-counted-actions"><input aria-label={`${book.title} yeni raf`} defaultValue={entry?.shelfAfter||book.shelf} onBlur={e=>{const value=e.target.value.trim();if(entry&&value&&value!==(entry.shelfAfter||book.shelf))void act("updateInventoryShelf",{sessionId:session?.id,bookId:book.id,shelf:value},"Raf bilgisi güncellendi.");}}/><span className={`badge ${activeIds.has(book.id)?"blue":"green"}`}>{activeIds.has(book.id)?"Ödünçte":"Rafta"}</span></div></article>})}{!countedBooks.length&&<Empty text="Sayılan kitaplar bu sütuna taşınacak."/>}</div></Card></div>
@@ -2247,7 +2277,7 @@ function AccountSecurity({
         <Card title="Kullanıcı Bilgileri">
           <div className="form-grid one">
             <p><strong>{currentUser?.displayName}</strong></p>
-            <p className="muted">{currentUser?.email}</p>
+            <p className="muted">{currentUser?.role==='student'?currentUser.phone:currentUser?.email}</p>
             <span className="badge blue">{currentUser?.role === "admin" ? "Yönetici" : currentUser?.role === "staff" ? "Kütüphane sorumlusu" : "Öğrenci"}</span>
           </div>
         </Card>
@@ -2393,6 +2423,7 @@ function Settings({
   const shelves = [...new Set(books.map((book) => book.shelf).filter(Boolean))].sort((a, b) => a.localeCompare(b, "tr"));
   const authors = [...new Set(books.map((book) => book.author).filter(Boolean))].sort((a, b) => a.localeCompare(b, "tr"));
   const [userForm, setUserForm] = useState({
+    id: 0,
     username: "",
     displayName: "",
     email: "",
@@ -2484,7 +2515,7 @@ function Settings({
     <section>
       <PageHead
         title="Kütüphane Ayarları"
-        text="Kurum bilgilerini, görünümü, ödünç süresini ve e-posta göndericisini düzenleyin."
+        text="Kurum bilgilerini, görünümü ve ödünç kurallarını düzenleyin."
       />
       <div className="settings-tabs" role="tablist" aria-label="Ayar modülleri">
         {[
@@ -2492,7 +2523,7 @@ function Settings({
           ["institution", "Kurum ve Logo", "⌂"],
           ["users", "Kullanıcılar", "◉"],
           ["circulation", "Ödünç Kuralları", "⇄"],
-          ["communication", "E-posta", "✉"],
+
           ["catalog", "Kitap Ayarları", "▤"],
           ["labels", "Barkod ve QR", "▦"],
           ["spine", "Sırt Etiketi", "▥"],
@@ -2714,6 +2745,7 @@ function Settings({
               Geçici parola / yeni parola
               <input type="password" autoComplete="new-password" minLength={6} value={userForm.password} onChange={(e) => setUserForm({ ...userForm, password: e.target.value })} placeholder="En az 6 karakter" />
             </label>
+            {userForm.role!=="student"&&<>
             <label>
               Giriş e-postası
               <input
@@ -2724,6 +2756,7 @@ function Settings({
                 }
               />
             </label>
+            </>}
             <label>
               Cep telefonu
               <input type="tel" inputMode="tel" value={userForm.phone} onChange={(e) => setUserForm({ ...userForm, phone: e.target.value })} placeholder="05xx xxx xx xx" />
@@ -2774,7 +2807,7 @@ function Settings({
             <label className="permission-option"><input type="checkbox" checked={userForm.active} onChange={(e) => setUserForm({ ...userForm, active: e.target.checked })} /> Hesap etkin</label>
             <button
               className="primary"
-              disabled={busy || !userForm.username || !userForm.email || !userForm.displayName || (userForm.password.length > 0 && userForm.password.length < 6)}
+              disabled={busy || !userForm.username || (userForm.role!=="student"&&!userForm.email) || !userForm.displayName || (userForm.password.length > 0 && userForm.password.length < 6)}
               onClick={() =>
                 act(
                   "upsertUser",
@@ -2793,9 +2826,10 @@ function Settings({
                 <span key={user.id}>
                   <span className="user-summary">
                     <strong>{user.displayName}</strong>
-                    <small>@{user.username || user.email} · {user.email}{user.phone ? ` · ${user.phone}` : ""} · {user.role}{user.role === "staff" && user.permissions.length ? ` · ${user.permissions.join(", ")}` : ""}</small>
+                    <small>@{user.username || user.email}{user.role!=="student"?` · ${user.email}`:""}{user.phone ? ` · ${user.phone}` : ""} · {user.role}{user.role === "staff" && user.permissions.length ? ` · ${user.permissions.join(", ")}` : ""}</small>
                   </span>
-                  <button className="small" disabled={busy} onClick={() => setUserForm({ username: user.username || "", displayName: user.displayName, email: user.email, phone: user.phone || "", password: "", role: user.role, studentId: user.studentId ? String(user.studentId) : "", permissions: user.permissions || [], active: Boolean(user.active) })}>Düzenle</button>
+                  <button className="small" disabled={busy} onClick={() => setUserForm({ id:user.id, username: user.username || "", displayName: user.displayName, email: user.email, phone: user.phone || "", password: "", role: user.role, studentId: user.studentId ? String(user.studentId) : "", permissions: user.permissions || [], active: Boolean(user.active) })}>Düzenle</button>
+                  {user.role!=="admin"&&<button className="small" disabled={busy||user.id===currentUser?.id} onClick={()=>{if(confirm(`${user.displayName} hesabının giriş üyeliği sıfırlansın mı? Öğrenci, kitap, ödünç ve sayım kayıtları korunur; öğrenci yeniden başvurabilir.`))void act("resetMembership",{id:user.id},"Giriş üyeliği sıfırlandı; kütüphane kayıtları korundu.");}}>Üyeliği sıfırla</button>}
                   <button
                     className="danger compact"
                     disabled={busy || user.id === currentUser?.id}
@@ -2811,7 +2845,7 @@ function Settings({
               ))}
             </div>
             <p className="muted">
-              Yeni hesap için en az 6 karakterlik geçici parola belirleyin. Mevcut kullanıcıyı aynı e-postayla kaydederken parola alanını doldurursanız parolası sıfırlanır.
+              Yeni hesap için en az 6 karakterlik geçici parola belirleyin. Bir kullanıcıda Düzenle seçeneğini açıp yeni parola girerek giriş bilgilerini güncelleyebilirsiniz.
             </p>
           </div>
         </Card>
@@ -2888,7 +2922,7 @@ function Settings({
           <div className="approval-list">
             {membershipRequests.filter((x) => x.status === "pending").map((row) => (
               <article key={row.id}>
-                <div><strong>{row.fullName}</strong><small>{row.grade} · No {row.studentNo} · {row.email} · {row.phone}</small><small>{row.city} / {row.district} · {row.schoolName}</small></div>
+                <div><strong>{row.fullName}</strong><small>{row.grade} · No {row.studentNo} · {row.phone}</small><small>{row.city} / {row.district} · {row.schoolName}</small></div>
                 <div className="actions"><button className="small" disabled={busy} onClick={() => act("rejectMembership", { id: row.id }, "Başvuru reddedildi.")}>Reddet</button><button className="primary small" disabled={busy} onClick={() => act("approveMembership", { id: row.id }, "Öğrenci hesabı onaylandı.")}>Onayla</button></div>
               </article>
             ))}
@@ -2896,44 +2930,6 @@ function Settings({
           </div>
         </Card>
         </div>
-        <Card title="E-posta Hesabı" visible={settingsModule === "communication"}>
-          <div className="form-grid one">
-            <label>
-              Gönderen adı
-              <input
-                value={form.senderName}
-                onChange={(e) =>
-                  setForm({ ...form, senderName: e.target.value })
-                }
-                placeholder="Çankırı Lisesi Kütüphanesi"
-              />
-            </label>
-            <label>
-              Doğrulanmış gönderen e-posta
-              <input
-                type="email"
-                value={form.senderEmail}
-                onChange={(e) =>
-                  setForm({ ...form, senderEmail: e.target.value })
-                }
-                placeholder="kutuphane@okul.edu.tr"
-              />
-            </label>
-            <p className="muted">
-              Toplu gönderim için bu adres e-posta servisinde doğrulanmalıdır.
-              Servis anahtarı tarayıcıda veya veritabanında tutulmaz.
-            </p>
-            <button
-              className="secondary"
-              disabled={busy}
-              onClick={() =>
-                act("settings", form, "E-posta gönderici bilgileri kaydedildi.")
-              }
-            >
-              Göndericiyi kaydet
-            </button>
-          </div>
-        </Card>
         <Card title="Arayüz Rengi ve Yazı Tipi" visible={settingsModule === "appearance"}>
           <div className="theme-grid">
             {themes.map((theme) => (
@@ -3137,7 +3133,8 @@ function StudentForm({
           fullName: initial.fullName,
           grade: initial.grade,
           contact: initial.contact,
-          email: initial.email,
+          ...(initial.memberType!=="student"?{email:initial.email}:{}),
+          branch: initial.branch||"",
           memberType: initial.memberType,
           blocked: Boolean(initial.blocked),
           blockReason: initial.blockReason,
@@ -3147,7 +3144,7 @@ function StudentForm({
           fullName: "",
           grade: "",
           contact: "",
-          email: "",
+          branch: "",
           memberType,
           blocked: false,
           blockReason: "",
@@ -3166,19 +3163,19 @@ function StudentForm({
         fullName: "Adı Soyadı *",
         grade: "Sınıfı *",
         contact: "Telefon / İletişim",
-        email: "E-posta",
-      }).filter(([key])=>f.memberType==="student"||!["studentNo","grade"].includes(key)).map(([key, label]) => (
+        branch: "Branşı",
+      }).filter(([key])=>f.memberType==="student"?key!=="branch":!["studentNo","grade"].includes(key)).map(([key, label]) => (
         <label key={key}>
           {label}
           <input
             type={key === "email" ? "email" : "text"}
             value={String(f[key as keyof typeof f])}
-            required={f.memberType!=="student" || ["studentNo","grade","fullName"].includes(key)}
+            required={key==="fullName"||(f.memberType==="student"&&["studentNo","grade"].includes(key))}
             onChange={(e) => setF({ ...f, [key]: key === "grade" ? normalizeGrade(e.target.value) : e.target.value })}
           />
         </label>
       ))}
-      {f.memberType==="student"&&<small>Sınıf ve şubeyi boşluksuz yazın: 9A, 10B, 12C.</small>}
+
       <label>Üye türü<select value={f.memberType} onChange={(e) => setF({ ...f, memberType: e.target.value as Student["memberType"] })}><option value="student">Öğrenci</option><option value="teacher">Öğretmen</option><option value="employee">Diğer çalışan</option></select></label>
       <label className="check-label"><input type="checkbox" checked={f.blocked} onChange={(e) => setF({ ...f, blocked: e.target.checked })} />Bu üyeye kitap verilmesin</label>
       {f.blocked && <label>Engel nedeni<select value={f.blockReason} onChange={(e) => setF({ ...f, blockReason: e.target.value })}><option value="">Neden seçin…</option><option>Çok geç iade</option><option>Kitaba zarar verme</option><option>Uygunsuz davranış</option><option>Ödenmemiş gecikme bedeli</option><option>Yönetici kararı</option></select></label>}
@@ -3433,3 +3430,10 @@ function daysBetween(a: string, b: string) {
     ),
   );
 }
+
+function downloadCsv(filename:string,rows:Record<string,string>[]) {
+ const safe=(value:unknown)=>{const text=String(value??'');return '"'+(/^[=+@\-\t\r]/.test(text)?"'"+text:text).replaceAll('"','""')+'"';};
+ const headings=Object.keys(rows[0]||{}),csv=[headings,...rows.map(row=>headings.map(h=>row[h]))].map(row=>row.map(safe).join(';')).join('\r\n');
+ downloadBlob(filename,new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'}));
+}
+

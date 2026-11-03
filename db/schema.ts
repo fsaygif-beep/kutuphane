@@ -30,6 +30,7 @@ export const students = sqliteTable("students", {
   grade: text("grade").notNull(),
   memberType: text("member_type").notNull().default("student"),
   activeMember: integer("active_member").notNull().default(1),
+  branch: text("branch").notNull().default(""),
   contact: text("contact").notNull().default(""),
   email: text("email").notNull().default(""),
   photoKey: text("photo_key").notNull().default(""),
@@ -238,3 +239,19 @@ export const readingListItems = sqliteTable("reading_list_items", {
   id: integer("id").primaryKey({ autoIncrement: true }), schoolId: integer("school_id").notNull(),
   listId: integer("list_id").notNull(), bookId: integer("book_id").notNull(), createdAt: text("created_at").notNull(),
 }, (t) => [uniqueIndex("reading_items_unique").on(t.listId,t.bookId)]);
+
+export const recommendationLists=sqliteTable('recommendation_lists',{
+  id:integer('id').primaryKey({autoIncrement:true}),schoolId:integer('school_id').notNull(),name:text('name').notNull(),createdAt:text('created_at').notNull(),
+},t=>[index('recommendation_school_idx').on(t.schoolId,t.id)]);
+export const recommendationItems=sqliteTable('recommendation_items',{
+  id:integer('id').primaryKey({autoIncrement:true}),schoolId:integer('school_id').notNull(),listId:integer('list_id').notNull(),bookId:integer('book_id').notNull(),
+},t=>[uniqueIndex('recommendation_items_unique').on(t.listId,t.bookId)]);
+export const recommendationProgress=sqliteTable('recommendation_progress',{
+  id:integer('id').primaryKey({autoIncrement:true}),schoolId:integer('school_id').notNull(),studentId:integer('student_id').notNull(),bookId:integer('book_id').notNull(),status:text('status').notNull(),
+},t=>[uniqueIndex('recommendation_progress_unique').on(t.schoolId,t.studentId,t.bookId)]);
+export const memberMessages=sqliteTable('member_messages',{
+  id:integer('id').primaryKey({autoIncrement:true}),schoolId:integer('school_id').notNull(),senderId:integer('sender_id').notNull(),subject:text('subject').notNull(),content:text('content').notNull(),createdAt:text('created_at').notNull(),
+});
+export const memberMessageReceipts=sqliteTable('member_message_receipts',{
+  id:integer('id').primaryKey({autoIncrement:true}),schoolId:integer('school_id').notNull(),messageId:integer('message_id').notNull(),studentId:integer('student_id').notNull(),readAt:text('read_at'),
+},t=>[uniqueIndex('member_receipts_unique').on(t.messageId,t.studentId),index('member_receipts_student_idx').on(t.schoolId,t.studentId,t.messageId)]);

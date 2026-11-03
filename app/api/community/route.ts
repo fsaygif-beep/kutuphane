@@ -1,3 +1,4 @@
+import {sameBookIdentity} from "../../book-identity";
 import { env } from "cloudflare:workers";
 import { getAppIdentity } from "../../authz";
 import { getSchoolAccess } from "../../subscription";
@@ -9,13 +10,15 @@ export async function GET(request: Request) {
   if(!(await getSchoolAccess(user.schoolId))?.allowed) return Response.json({error:"Okul erişimi kapalı."},{status:403});
   const school=user.schoolId, own=user.role==="student", admin=user.role==="admin";
   const params=new URL(request.url).searchParams, scope=params.get("scope"), book=Number(params.get("bookId"));
-  if(scope==="reviews") {
-    const reviews=await env.DB.prepare(`SELECT r.id,r.book_id AS bookId,r.content,r.status,r.created_at AS createdAt,s.full_name AS name,
+  if(scope==="reviews"||scope==="myReviews") {
+    if(scope==="myReviews"&&!own)return Response.json({error:"Öğrenci hesabı gereklidir."},{status:403});
+    const selected=book?await env.DB.prepare("SELECT title,author FROM books WHERE id=? AND school_id=?").bind(book,school).first<{title:string;author:string}>():null;
+    if(book&&!selected)return Response.json({error:"Kitap bulunamadı."},{status:404});
+    const reviews=await env.DB.prepare(`SELECT b.title,b.author,r.id,r.book_id AS bookId,r.content,r.status,r.created_at AS createdAt,s.full_name AS name,
       r.student_id AS studentId FROM book_reviews r JOIN students s ON s.id=r.student_id AND s.school_id=r.school_id
       JOIN books b ON b.id=r.book_id AND b.school_id=r.school_id WHERE r.school_id=?
-      AND (?=0 OR (b.title,b.author) IN (SELECT title,author FROM books WHERE id=? AND school_id=?))
-      AND (r.status='approved' OR ?=1 OR r.student_id=?) ORDER BY r.id DESC`).bind(school,book,book,school,admin?1:0,own?user.studentId:0).all();
-    return Response.json({reviews:reviews.results.map((r:any)=>({id:r.id,bookId:r.bookId,content:r.content,status:r.status,createdAt:r.createdAt,name:privateReviewerName(r.name),own:own&&r.studentId===user.studentId}))});
+      AND (r.status='approved' OR ?=1 OR r.student_id=?) ORDER BY r.id DESC`).bind(school,admin?1:0,own?user.studentId:0).all();
+    return Response.json({reviews:reviews.results.filter((r:any)=>(scope!=="myReviews"||r.studentId===user.studentId)&&(!selected||sameBookIdentity(r,selected))).map((r:any)=>({id:r.id,bookId:r.bookId,content:r.content,status:r.status,createdAt:r.createdAt,bookTitle:r.title,bookAuthor:r.author,name:privateReviewerName(r.name),own:own&&r.studentId===user.studentId}))});
   }
   if(scope==="complaints") {
     if(!own&&!admin&&!(user.role==="staff"&&user.permissions.includes("requests")))return Response.json({error:"Yetkisiz."},{status:403});
@@ -49,10 +52,10 @@ export async function POST(request: Request) {
     } else if(action==="addReview") {
       if(!student)return fail("Yorumlar öğrenci hesabından gönderilir.",403);
       if(!content||content.length>2000)return fail("Yorum 1–2000 karakter olmalıdır.");
-      const read=await env.DB.prepare(`SELECT l.id FROM loans l JOIN books b ON b.id=l.book_id AND b.school_id=l.school_id
-        WHERE l.school_id=? AND l.student_id=? AND l.returned_at IS NOT NULL
-        AND (b.title,b.author) IN (SELECT title,author FROM books WHERE school_id=? AND id=?) LIMIT 1`).bind(school,student,school,book).first();
-      if(!read)return fail("Yalnızca okuyup iade ettiğiniz kitaplara yorum yapabilirsiniz.",403);
+      const selected=await env.DB.prepare("SELECT title,author FROM books WHERE id=? AND school_id=?").bind(book,school).first<{title:string;author:string}>();
+      const read=await env.DB.prepare(`SELECT b.title,b.author FROM loans l JOIN books b ON b.id=l.book_id AND b.school_id=l.school_id
+        WHERE l.school_id=? AND l.student_id=? AND l.returned_at IS NOT NULL`).bind(school,student).all<{title:string;author:string}>();
+      if(!selected||!read.results.some(r=>sameBookIdentity(r,selected)))return fail("Yalnızca okuyup iade ettiğiniz kitaplara yorum yapabilirsiniz.",403);
       await env.DB.prepare("INSERT INTO book_reviews(school_id,student_id,book_id,content,status,created_at) VALUES(?,?,?,?,'pending',?)").bind(school,student,book,content,now).run();
     } else if(action==="addComplaint") {
       if(!student)return fail("Öğrenci hesabı gereklidir.",403);

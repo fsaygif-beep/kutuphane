@@ -1,3 +1,4 @@
+import {matchText,sameDistrict} from "../../member-matching";
 import { normalizeGrade, validGrade, normalizePhone, validPhone } from "../../student-rules";
 import { and, eq, or } from "drizzle-orm";
 import { getDb } from "../../../db";
@@ -15,7 +16,7 @@ async function derivePassword(password: string, salt: Uint8Array) {
   return toBase64(new Uint8Array(bits));
 }
 
-const normalized = (value: unknown) => String(value ?? "").trim().replace(/\s+/g, " ").toLocaleUpperCase("tr");
+const normalized = matchText;
 
 export async function POST(request: Request) {
   const body = await request.json() as Record<string, unknown>;
@@ -29,15 +30,17 @@ export async function POST(request: Request) {
   if(!validGrade(grade))return Response.json({error:"Sınıf ve şubeyi boşluksuz yazın. Örnek: 9A, 10B, 12C."},{status:400});
   if(!validPhone(phone))return Response.json({error:"Geçerli cep telefonu girin. Örnek: 05XXXXXXXXX."},{status:400});
   const studentNo = String(body.studentNo ?? "").trim();
-  const email = String(body.email ?? "").trim().toLocaleLowerCase("tr");
-  const username = email;
+  const email = `${phone}@phone.local`;
+  const username = phone;
   const password = String(body.password ?? "");
-  if (![institutionCode, city, district, schoolName, fullName, grade, studentNo, email].every(Boolean) || password.length < 6)
+  if (![city, district, schoolName, fullName, grade, studentNo].every(Boolean) || password.length < 6)
     return Response.json({ error: "Tüm alanları doldurun; parola en az 6 karakter olmalıdır." }, { status: 400 });
 
   const db = getDb();
-  const [school] = await db.select().from(schools).where(and(eq(schools.institutionCode, institutionCode), eq(schools.active, 1)));
-  if (!school || normalized(school.city) !== normalized(city) || normalized(school.district) !== normalized(district) || normalized(school.name) !== normalized(schoolName))
+  const candidates=await db.select().from(schools).where(eq(schools.active,1));
+  const matches=candidates.filter(s=>(!institutionCode||normalized(s.institutionCode)===institutionCode)&&normalized(s.city)===normalized(city)&&sameDistrict(city,s.district,district)&&normalized(s.name)===normalized(schoolName));
+  const school=matches.length===1?matches[0]:undefined;
+  if (!school)
     return Response.json({ error: "Kurum kodu veya okul bilgileri kayıtlarla uyuşmuyor." }, { status: 404 });
 
   const [student] = await db.select().from(students).where(and(eq(students.schoolId, school.id), eq(students.studentNo, studentNo),eq(students.activeMember,1)));
@@ -46,7 +49,7 @@ export async function POST(request: Request) {
 
   const [existingUser] = await db.select({ id: appUsers.id }).from(appUsers)
     .where(and(eq(appUsers.schoolId, school.id), or(eq(appUsers.username, username), eq(appUsers.email, email),eq(appUsers.studentId,student.id),eq(appUsers.phone,phone))));
-  if (existingUser) return Response.json({ error: "Bu kullanıcı adı veya e-posta ile etkin bir hesap zaten var." }, { status: 409 });
+  if (existingUser && (await db.select().from(appUsers).where(eq(appUsers.id,existingUser.id)))[0]?.active) return Response.json({ error: "Bu öğrenci veya cep telefonu için etkin bir hesap zaten var." }, { status: 409 });
 
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const values = {

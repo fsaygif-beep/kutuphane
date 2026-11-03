@@ -1,0 +1,29 @@
+{
+  "date": "2026-11-04",
+  "tables": {
+    "admin_notes": 4,
+    "app_sessions": 14,
+    "app_users": 6,
+    "books": 7986,
+    "book_requests": 1,
+    "book_reviews": 2,
+    "complaints": 0,
+    "email_logs": 0,
+    "inventory_entries": 4861,
+    "inventory_sessions": 1,
+    "loans": 349,
+    "membership_requests": 2,
+    "reading_lists": 0,
+    "reading_list_items": 0,
+    "schools": 1,
+    "school_applications": 1,
+    "settings": 1,
+    "students": 545,
+    "student_changes": 0
+  },
+  "restore_verified": true,
+  "migration_0020_preserves_every_existing_value": true,
+  "live_database_modified_by_backup": false,
+  "R2_binaries_included": false,
+  "note": "Read-only paginated D1 export, not an atomic cross-table snapshot. Media files in existing R2 retained."
+}
