@@ -1,0 +1,37 @@
+{
+  "date": "2026-11-04",
+  "version": 32,
+  "source_commit": "4fe2fa3bc7df7f161f5c5716d814649d91ed7c95",
+  "version_id": "appgprj_6a8a6bfceee081919b5baf62687c7dc2~appgver_5f3caf349f388191b44cc5c9840d8642",
+  "deployment_id": "appgdep_6aea686f10888191bda4ff667c8caf01",
+  "deployment_status": "succeeded",
+  "zip_sha256": "ce60d9f06eb21a2f87d1be60791680694d151a5ede0da3774eea44781b0d75d4",
+  "settings_download_matches": true,
+  "tests_passed": 29,
+  "typecheck_passed": true,
+  "build_passed": true,
+  "changes": [
+    "Show student class with a separating space in member list and signup/edit fields",
+    "Hide teacher and employee internal member codes from member list and lending/returning views",
+    "When a staff code is scanned, show the member caption instead of the code; preserve internal id selection"
+  ],
+  "data_protection": {
+    "baseline": "59be74b0d0ce2f3e96c0271da5a3a1da40e94aaf",
+    "api_schema_and_migrations_identical": true,
+    "database_migration_added": false,
+    "live_business_data_written": false,
+    "bindings_preserved": [
+      "DB",
+      "BUCKET"
+    ],
+    "note": "Display formatting only. Stored class values, IDs, loans, returns, inventory entries and member/book data were not rewritten."
+  },
+  "browser_checks": [
+    "Local students show 10 A / 10 B; signup 9/a displays 9 A",
+    "Local teacher and employee member tables contain no internal code under the name",
+    "Local lending and return views hide codes, including scanned codes, while selecting the correct member",
+    "Live student 9 A display verified",
+    "Live teacher and employee code-line count is zero",
+    "Live settings ZIP downloaded and hashed"
+  ]
+}

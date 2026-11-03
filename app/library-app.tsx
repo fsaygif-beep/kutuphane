@@ -7,6 +7,7 @@ import {sameBookIdentity,selectedInventoryBook} from "./book-identity";
 import {MyReviews,Recommendations,Messages,SwitchUser} from "./member-portal";
 import {QrScanner} from "./qr-scanner";
 import { LocationFields } from "./location-fields";
+import {displayGrade,memberCaption} from "./member-display";
 import {normalizeGrade,validGrade} from "./student-rules";
 import {Photo,BookDiscussion,ReviewModeration,Complaints,StudentReading,ReadingLists} from "./student-community";
 import { reportData } from "./report-data";
@@ -320,7 +321,7 @@ function MembershipSignup({ data, busy, act }: { data: UnregisteredData; busy: b
             <label>İlçe<input value={form.district} onChange={(e) => setForm({ ...form, district: e.target.value })} /></label>
             <label>Okul adı<input value={form.schoolName} onChange={(e) => setForm({ ...form, schoolName: e.target.value })} /></label>
             <label>Adı soyadı<input value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} /></label>
-            <div className="form-grid two"><label>Sınıf<input value={form.grade} onChange={(e) => setForm({ ...form, grade: e.target.value })} placeholder="9-A" /></label><label>Öğrenci no<input value={form.studentNo} onChange={(e) => setForm({ ...form, studentNo: e.target.value })} /></label></div>
+            <div className="form-grid two"><label>Sınıf<input value={form.grade} onChange={(e) => setForm({ ...form, grade: e.target.value })} placeholder="9 A" /></label><label>Öğrenci no<input value={form.studentNo} onChange={(e) => setForm({ ...form, studentNo: e.target.value })} /></label></div>
             <button className="primary" disabled={busy || Object.values(form).some((x) => !x.trim())} onClick={() => act("submitMembershipRequest", form, "Başvurunuz yönetici onayına gönderildi.")}>Üyelik talebi gönder</button>
           </div>
         )}
@@ -395,7 +396,7 @@ function LoginScreen({ onLogin }: { onLogin: () => Promise<void> }) {
       {studentApplicationMode ? <form className="login-form school-application" onSubmit={applyStudent}>
         <LocationFields city={studentApplication.city} district={studentApplication.district} onChange={(city,district)=>setStudentApplication({...studentApplication,city,district})}/>
 
-        {Object.entries({ schoolName: "Okul adı", fullName: "Adı soyadı", grade: "Sınıf ve şube (ör. 10A)", studentNo: "Öğrenci numarası", phone: "Cep telefonu (05XXXXXXXXX)", password: "En az 6 karakter parola" }).map(([key, label]) => <label key={key}>{label}<input type={key === "password" ? "password" : key === "email" ? "email" : key === "phone" ? "tel" : "text"} value={studentApplication[key as keyof typeof studentApplication]} onChange={(event) => setStudentApplication({ ...studentApplication, [key]: key === "grade" ? normalizeGrade(event.target.value) : event.target.value })} required minLength={key === "password" ? 6 : undefined} /></label>)}
+        {Object.entries({ schoolName: "Okul adı", fullName: "Adı soyadı", grade: "Sınıf ve şube (ör. 9 A)", studentNo: "Öğrenci numarası", phone: "Cep telefonu (05XXXXXXXXX)", password: "En az 6 karakter parola" }).map(([key, label]) => <label key={key}>{label}<input type={key === "password" ? "password" : key === "email" ? "email" : key === "phone" ? "tel" : "text"} value={studentApplication[key as keyof typeof studentApplication]} onChange={(event) => setStudentApplication({ ...studentApplication, [key]: key === "grade" ? displayGrade(normalizeGrade(event.target.value)) : event.target.value })} required minLength={key === "password" ? 6 : undefined} /></label>)}
         {error && <p className="login-error">{error}</p>}
         <button className="login-button" disabled={busy}>Üyelik talebi gönder <span>→</span></button>
         <button type="button" className="secondary" onClick={() => setStudentApplicationMode(false)}>Giriş ekranına dön</button>
@@ -827,6 +828,7 @@ function Circulation({ mode, students, books, active, history, busy, act }: {
   act: (a: string, p: Record<string, unknown>, s: string) => Promise<boolean>;
 }) {
   const [studentQuery, setStudentQuery] = useState("");
+  const [selectedMemberId,setSelectedMemberId]=useState<number|null>(null);
   const [bookQuery, setBookQuery] = useState("");
   const suggestions=useMemo(()=>{
     const text=bookQuery.toLocaleUpperCase("tr").trim();
@@ -834,9 +836,16 @@ function Circulation({ mode, students, books, active, history, busy, act }: {
   },[books,bookQuery]);
   const memberSuggestions=useMemo(()=>{const text=studentQuery.toLocaleUpperCase("tr").trim();return students.filter(s=>!text||`${s.studentNo} ${s.fullName} ${s.grade}`.toLocaleUpperCase("tr").includes(text)).slice(0,40);},[students,studentQuery]);
   const submitting = useRef(false);
-  const memberValue = (member: Student) => `${member.studentNo} · ${member.fullName} · ${member.grade}`;
+  const memberValue = memberCaption;
   const memberMatches = matchingRecords(students, studentQuery, (member) => [member.studentNo, member.fullName, memberValue(member)]);
-  const selectedStudent = memberMatches.length === 1 ? memberMatches[0] : undefined;
+  const selectedStudent = students.find(member=>member.id===selectedMemberId) || (memberMatches.length === 1 ? memberMatches[0] : undefined);
+  const setMemberQuery = (value:string) => {
+    const matches=matchingRecords(students,value,member=>[member.studentNo,member.fullName,memberValue(member)]);
+    const member=matches.length===1?matches[0]:undefined;
+    const hideCode=member&&member.memberType!=="student";
+    setSelectedMemberId(hideCode?member.id:null);
+    setStudentQuery(hideCode?memberValue(member):value);
+  };
   const bookMatches = matchingRecords(books, bookQuery, (book) => [book.inventoryNo, book.isbn, book.title, `${book.inventoryNo} · ${book.title} · ${book.author}`]);
   const selectedBook = bookMatches.length === 1 ? bookMatches[0] : undefined;
   const loanValue = (loan: Loan) => `${loan.inventoryNo} · ${loan.bookTitle} · ${loan.studentName}`;
@@ -844,7 +853,7 @@ function Circulation({ mode, students, books, active, history, busy, act }: {
   const selectedReturn = returnMatches.length === 1 ? returnMatches[0] : undefined;
   const selectBorrower = (loan: Loan) => {
     const member = students.find((row) => row.id === loan.studentId);
-    if (member) setStudentQuery(memberValue(member));
+    if (member) {setSelectedMemberId(member.id);setStudentQuery(memberValue(member));}
   };
   const searchReturnBook = (value: string) => {
     setBookQuery(value);
@@ -866,7 +875,7 @@ function Circulation({ mode, students, books, active, history, busy, act }: {
       if (await act("loan", { studentId: selectedStudent.id, bookId: selectedBook.id }, "Kitap ödünç verildi.")) setBookQuery("");
     } finally { submitting.current = false; }
   };
-  const list = (rows: Loan[], chooseMember = false) => <LoanTable rows={rows} showReturn showPhotos busy={busy}
+  const list = (rows: Loan[], chooseMember = false) => <LoanTable rows={rows.map(loan=>({...loan,grade:students.find(member=>member.id===loan.studentId)?.memberType==="student"?displayGrade(loan.grade):""}))} showReturn showPhotos busy={busy}
     onReturn={(id) => void returnBook(id)}
     onSelectMember={chooseMember ? selectBorrower : undefined}
     onRenew={(id) => act("renewLoan", { loanId: id }, "Kitabın teslim süresi uzatıldı.")}
@@ -877,9 +886,9 @@ function Circulation({ mode, students, books, active, history, busy, act }: {
       <Card title={mode === "lend" ? "Yeni ödünç işlemi" : "İade edilecek kitabı veya üyeyi seçin"}>
         <div className="loan-entry-grid">
           <div className="step"><b>1</b><label>QR / Üye No / Ad Soyad
-            <input list="circulation-members" value={studentQuery} onChange={(event) => { setStudentQuery(event.target.value); if (mode === "return") setBookQuery(""); }} placeholder="Üye numarasını okutun veya kişiyi seçin…" autoComplete="off" />
+            <input list="circulation-members" value={studentQuery} onChange={(event) => { setMemberQuery(event.target.value); if (mode === "return") setBookQuery(""); }} placeholder="Üye numarasını okutun veya kişiyi seçin…" autoComplete="off" />
             <datalist id="circulation-members">{memberSuggestions.map((member) => <option key={member.id} value={memberValue(member)} />)}</datalist>
-            {memberMatches.length > 1 && <small role="status">Aynı adla birden fazla üye var. Üye numarasıyla seçin.</small>}
+            {memberMatches.length > 1 && !selectedStudent && <div className="member-match-options"><small role="status">Birden fazla üye bulundu. İlgili kişiyi seçin.</small>{memberMatches.map(member=><button type="button" className="small" key={member.id} onClick={()=>{setSelectedMemberId(member.id);setStudentQuery(memberValue(member));}}>{memberValue(member)}</button>)}</div>}
           </label></div>
           <div className="step"><b>2</b><label>{mode === "lend" ? "QR / DN / ISBN / Kitap Adı" : "QR / DN / İade edilecek kitap"}
             <input list="circulation-books" value={bookQuery} onChange={(event) => mode === "lend" ? setBookQuery(event.target.value) : searchReturnBook(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); if (mode === "lend") void lend(); } }} placeholder="Demirbaş numarasını okutun veya kitabı seçin…" autoComplete="off" />
@@ -890,7 +899,7 @@ function Circulation({ mode, students, books, active, history, busy, act }: {
         </div>
         <div className="circulation-camera"><QrScanner disabled={busy} onScan={value=>mode==="lend"?setBookQuery(value):searchReturnBook(value)}/></div>
         <div className="circulation-previews">
-          {selectedStudent && <div className="circulation-preview"><CirculationPhoto imageKey={selectedStudent.photoKey} name={selectedStudent.fullName} kind="member" /><div><strong>{selectedStudent.fullName}</strong><small>No {selectedStudent.studentNo} · {selectedStudent.grade}</small><span className="badge blue">{personLoans.length} kitap üzerinde</span>{mode === "lend" && Boolean(selectedStudent.blocked) && <p className="login-error">Bu üyeye kitap verilemez: {selectedStudent.blockReason || "Yönetici engeli"}</p>}</div></div>}
+          {selectedStudent && <div className="circulation-preview"><CirculationPhoto imageKey={selectedStudent.photoKey} name={selectedStudent.fullName} kind="member" /><div><strong>{selectedStudent.fullName}</strong>{selectedStudent.memberType==="student"&&<small>No {selectedStudent.studentNo} · {displayGrade(selectedStudent.grade)}</small>}<span className="badge blue">{personLoans.length} kitap üzerinde</span>{mode === "lend" && Boolean(selectedStudent.blocked) && <p className="login-error">Bu üyeye kitap verilemez: {selectedStudent.blockReason || "Yönetici engeli"}</p>}</div></div>}
           {mode === "lend" && selectedBook && <div className="circulation-preview"><CirculationPhoto imageKey={selectedBook.coverKey} name={selectedBook.title} kind="book" /><div><strong>{selectedBook.title}</strong><small>{selectedBook.author}</small><small>DN {selectedBook.inventoryNo}</small></div></div>}
           {mode === "return" && selectedReturn && <div className="circulation-preview"><CirculationPhoto imageKey={selectedReturn.bookCoverKey} name={selectedReturn.bookTitle} kind="book" /><div><strong>{selectedReturn.bookTitle}</strong><small>{selectedReturn.author} · DN {selectedReturn.inventoryNo}</small><small>{selectedReturn.studentName}</small><button className="small" disabled={busy} onClick={() => void returnBook(selectedReturn.id)}>Bu kitabı iade al</button></div></div>}
         </div>
@@ -1433,10 +1442,10 @@ function Students({
                 </td>
                 <td>
                   <strong>{x.fullName}</strong>
-                  <small>{x.studentNo}</small>
+                  {x.memberType==="student"&&<small>{x.studentNo} · {displayGrade(x.grade)}</small>}
                 </td>
                 <td>
-                  <span className="badge blue">{x.grade}</span>
+                  <span className="badge blue">{x.memberType==="student"?displayGrade(x.grade):""}</span>
                 </td>
                 <td>{x.contact || "—"}</td>
                 <td>{x.branch || "—"}</td>
@@ -3131,7 +3140,7 @@ function StudentForm({
       ? {
           studentNo: initial.studentNo,
           fullName: initial.fullName,
-          grade: initial.grade,
+          grade: displayGrade(initial.grade),
           contact: initial.contact,
           ...(initial.memberType!=="student"?{email:initial.email}:{}),
           branch: initial.branch||"",
@@ -3171,7 +3180,7 @@ function StudentForm({
             type={key === "email" ? "email" : "text"}
             value={String(f[key as keyof typeof f])}
             required={key==="fullName"||(f.memberType==="student"&&["studentNo","grade"].includes(key))}
-            onChange={(e) => setF({ ...f, [key]: key === "grade" ? normalizeGrade(e.target.value) : e.target.value })}
+            onChange={(e) => setF({ ...f, [key]: key === "grade" ? displayGrade(normalizeGrade(e.target.value)) : e.target.value })}
           />
         </label>
       ))}
