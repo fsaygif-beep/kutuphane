@@ -25,5 +25,8 @@
   "migration_0020_preserves_every_existing_value": true,
   "live_database_modified_by_backup": false,
   "R2_binaries_included": false,
-  "note": "Read-only paginated D1 export, not an atomic cross-table snapshot. Media files in existing R2 retained."
+  "note": "Read-only paginated D1 export, not an atomic cross-table snapshot. Media files in existing R2 retained.",
+  "file": "kutuphane-uyelik-mesaj-2026-11-04.enc",
+  "sha256": "aa9fe6cdca259381f0deea29a14e5b4779858bebd5a3dd5d09093407b183f572",
+  "encryption": "AES-256-GCM; key retained locally, not in repository"
 }

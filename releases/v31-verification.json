@@ -1,0 +1,91 @@
+{
+  "date": "2026-11-04",
+  "version": 31,
+  "source_commit": "59be74b0d0ce2f3e96c0271da5a3a1da40e94aaf",
+  "version_id": "appgprj_6a8a6bfceee081919b5baf62687c7dc2~appgver_3c9c216e0e44819189642c10ed8d128c",
+  "deployment_id": "appgdep_6aea56fa9e208191a470af6e37d971fb",
+  "deployment_status": "succeeded",
+  "url": "https://okulkutuphanesi.com.tr",
+  "zip_sha256": "c6e9fbba54944f4aa1ab9f81111120365235525cc9e2e2fb683075bdb62ecd06",
+  "settings_download_matches": true,
+  "tests_passed": 29,
+  "typecheck_passed": true,
+  "production_build_passed": true,
+  "migration": "0020_member_portal.sql: five new tables and one additive branch field only",
+  "preupdate_backup": {
+    "date": "2026-11-04",
+    "tables": {
+      "admin_notes": 4,
+      "app_sessions": 14,
+      "app_users": 6,
+      "books": 7986,
+      "book_requests": 1,
+      "book_reviews": 2,
+      "complaints": 0,
+      "email_logs": 0,
+      "inventory_entries": 4861,
+      "inventory_sessions": 1,
+      "loans": 349,
+      "membership_requests": 2,
+      "reading_lists": 0,
+      "reading_list_items": 0,
+      "schools": 1,
+      "school_applications": 1,
+      "settings": 1,
+      "students": 545,
+      "student_changes": 0
+    },
+    "restore_verified": true,
+    "migration_0020_preserves_every_existing_value": true,
+    "live_database_modified_by_backup": false,
+    "R2_binaries_included": false,
+    "note": "Read-only paginated D1 export, not an atomic cross-table snapshot. Media files in existing R2 retained.",
+    "file": "kutuphane-uyelik-mesaj-2026-11-04.enc",
+    "sha256": "aa9fe6cdca259381f0deea29a14e5b4779858bebd5a3dd5d09093407b183f572",
+    "encryption": "AES-256-GCM; key retained locally, not in repository"
+  },
+  "live_protected_records": {
+    "students": {
+      "before": 545,
+      "after": 545,
+      "missing": 0,
+      "changed": 0
+    },
+    "loans": {
+      "before": 349,
+      "after": 349,
+      "missing": 0,
+      "changed": 0
+    },
+    "books": {
+      "before": 7986,
+      "after": 7986,
+      "missing": 0,
+      "changed": 0
+    },
+    "inventory_entries": {
+      "before": 4861,
+      "after": 4861,
+      "missing": 0,
+      "changed": 0
+    }
+  },
+  "current_bindings_preserved": [
+    "DB",
+    "BUCKET"
+  ],
+  "live_business_records_written_during_verification": false,
+  "browser_checks": [
+    "Membership required fields exclude email; Çankırı Merkez maps to Merkez; 9/a becomes 9A",
+    "Admin recommendation created, populated and visible to student; Okudum applies green style",
+    "Filtered overdue message delivered to intended student; reading appears in admin Okunan Mesajlar",
+    "Student Yorumlarım includes own pending comment",
+    "Overdue warning animates on student pages",
+    "Phone list XLSX and CSV downloaded; XLSX content verified",
+    "Live teacher form: name required; phone and branch optional",
+    "Live QR / barcode button exists; QR photo input absent",
+    "Live recommendations and messages modules open without errors",
+    "Settings source ZIP downloaded and hashed"
+  ],
+  "verification_limit": "Real phone camera hardware was not physically exercised. QR, ISBN EAN13 and Code128 decoding were tested with generated images."
+}
